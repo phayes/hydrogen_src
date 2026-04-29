@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "hydrogen_src",
+    "rubato_src_test",
+    "ardftsrc_src_test",
+]
+resolver = "2"
