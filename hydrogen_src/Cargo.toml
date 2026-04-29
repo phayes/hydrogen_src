@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-reqwest = { version = "*", default-features = false, features = ["blocking", "rustls-tls"] }
-thiserror = "*"
-wavers = "*"
-zip = "*"
+reqwest = { version = "0.13", features = ["blocking"] }
+thiserror = "2"
+wavers = "1"
+zip = "8"
