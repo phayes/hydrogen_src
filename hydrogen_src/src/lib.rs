@@ -1,5 +1,5 @@
 use std::fs::{self, File};
-use std::io::{self, Cursor, Write};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use reqwest::blocking::Client;
@@ -201,27 +201,7 @@ impl HydrogenSrc {
 
         let zip_file = File::open(self.sample_pack_path()?)?;
         let mut sample_pack_archive = zip::ZipArchive::new(zip_file)?;
-
-        for index in 0..sample_pack_archive.len() {
-            let mut entry = sample_pack_archive.by_index(index)?;
-            let enclosed = match entry.enclosed_name() {
-                Some(path) => path.to_path_buf(),
-                None => continue,
-            };
-
-            let out_path = self.absolute_work_dir()?.join(enclosed);
-            if entry.name().ends_with('/') {
-                fs::create_dir_all(&out_path)?;
-                continue;
-            }
-
-            if let Some(parent) = out_path.parent() {
-                fs::create_dir_all(parent)?;
-            }
-
-            let mut out_file = File::create(out_path)?;
-            io::copy(&mut entry, &mut out_file)?;
-        }
+        sample_pack_archive.extract(self.absolute_work_dir()?)?;
 
         Ok(())
     }
@@ -244,9 +224,7 @@ impl HydrogenSrc {
 
         let file = File::create(&output_zip)?;
         let mut writer = zip::ZipWriter::new(file);
-        let options = SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Deflated)
-            .unix_permissions(0o644);
+        let options = SimpleFileOptions::default();
 
         for output_file in list_wavs(&output_dir)? {
             let rel_path =
@@ -257,10 +235,9 @@ impl HydrogenSrc {
                         base: output_dir.to_path_buf(),
                     })?;
 
-            let rel_name = rel_path.to_string_lossy().replace('\\', "/");
-            writer.start_file(&rel_name, options)?;
-            let bytes = fs::read(output_file)?;
-            io::copy(&mut Cursor::new(bytes), &mut writer)?;
+            writer.start_file_from_path(rel_path, options)?;
+            let mut input = File::open(output_file)?;
+            io::copy(&mut input, &mut writer)?;
         }
 
         writer.finish()?;
