@@ -19,3 +19,10 @@ cargo run -p rubato_src_test -- --workdir=./workspace --f64 --chunk-size=1024 --
 ## Rubato Params
 - `--chunk-size`: rubato chunk-size
 - `--sub-chunk`:  rubato sub-chunks
+
+## Add your own converter
+
+1. Add a new workspace binary crate (for example `my_src_test`) and include `hydrogen_src` plus your SRC dependency in `Cargo.toml`.
+2. Copy structure from `rubato_src_test` or `ardftsrc_src_test` and adapt as needed
+4. Run it with `cargo run -p my_src_test -- --workdir=./workspace`.
+5. Open a PR against `https://github.com/phayes/hydrogen_src` to get your converter officially added.
