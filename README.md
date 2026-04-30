@@ -9,6 +9,8 @@ See: https://src.hydrogenaudio.org/
 ```bash
 cargo run -p rubato_src_test -- --workdir=./workspace
 cargo run -p rubato_src_test -- --workdir=./workspace --f64 --chunk-size=1024 --sub-chunk=2
+cargo run -p rubato_src_test -- --workdir=./workspace --local # Run analysis locally, requires "octave" commandline
+cargo run -p rubato_src_test -- --workdir=./workspace --local --json # Run analysis locally and report output in json for automation
 ```
 
 ## Params
