@@ -1,0 +1,48 @@
+freq1 = 1;  % start frequency
+freq2 = 44000; % end frequency (so can use subtraction)
+fs = 96000;
+dur = 20;     % duration of signal in seconds
+
+t = 0:1/fs:dur;
+freqt = linspace(freq1,freq2,numel(t));
+ifreqt = cumsum(freqt)/fs;
+y = sin(2*pi*ifreqt);
+
+y32bitint = int32(y * 2147483647);
+audiowrite('64bitfloat/sweep_1_to_44KHz-64bitfloat.wav', y, fs, 'BitsPerSample', 64);
+audiowrite('32bitfloat/sweep_1_to_44KHz-32bitfloat.wav', y, fs, 'BitsPerSample', 32);
+audiowrite('32bitint/sweep_1_to_44KHz-32bitint.wav', y32bitint, fs, 'BitsPerSample', 32);
+audiowrite('24bitint/sweep_1_to_44KHz-24bitint.wav', y, fs, 'BitsPerSample', 24);
+
+audiowrite('44kHzIdealResponse/sweep_1_to_44KHz_AS96KHz64bitfloat.wav', y, fs, 'BitsPerSample', 64);
+
+
+% ideal as though resampled at 44.1kHz
+fs_ideal = 44100;
+freq1_ideal = freq1;
+%freq2_ideal = 22000; % end frequency (so can use subtraction)
+freq2_ideal = fs_ideal/2;
+%dur_ideal = 10;     % duration of signal in seconds
+dur_ideal = dur * freq2_ideal / freq2;     % duration of signal in seconds
+t_ideal = 0:1/fs_ideal:dur_ideal;
+freqt_ideal = linspace(freq1_ideal,freq2_ideal,numel(t_ideal));
+ifreqt_ideal = cumsum(freqt_ideal)/fs_ideal;
+y_ideal = sin(2*pi*ifreqt_ideal);
+
+%fade 0.1 seconds at end
+fadeDuration = 0.08; % seconds
+fadeSamples = round(fadeDuration * fs_ideal);
+%fadeOutEnvelope = linspace(1, 0, fadeSamples)';
+fadeOutEnvelope = cos(pi * (0:fadeSamples-1) / (2 * fadeSamples))';
+lenFade = length(fadeOutEnvelope);
+y_end_portion = y_ideal(end - lenFade + 1 : end);
+result_portion = y_end_portion .* fadeOutEnvelope';
+result_portion = result_portion .* fadeOutEnvelope';
+y_ideal(end - lenFade + 1 : end) = result_portion;
+
+t_idealZEROs = 0:1/fs_ideal:dur_ideal; % Time vector
+t_idealZEROs(end) = [];%remove one from end
+y_idealZEROs = 0 * sin(2 * pi * 1000 * t_idealZEROs); % Sine wave signal
+
+y_idealFinal = [y_ideal,y_idealZEROs];
+audiowrite('44kHzIdealResponse/sweep_1_to_44KHz-64bitfloat.wav', y_idealFinal, fs_ideal, 'BitsPerSample', 64);

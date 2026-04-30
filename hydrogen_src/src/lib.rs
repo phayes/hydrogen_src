@@ -7,6 +7,9 @@ use thiserror::Error;
 use wavers::{Wav, write};
 use zip::write::SimpleFileOptions;
 
+pub mod local;
+pub use local::LocalHarness;
+
 const TARGET_OUTPUT_SAMPLE_RATE: usize = 44_100;
 
 #[derive(Debug, Clone, Copy)]
@@ -61,8 +64,8 @@ pub struct ResampleRequestF64 {
     pub target_sample_rate: usize,
 }
 
-pub type ResamplerCallbackF32 = dyn FnMut(ResampleRequestF32) -> Vec<f32>;
-pub type ResamplerCallbackF64 = dyn FnMut(ResampleRequestF64) -> Vec<f64>;
+pub type ResamplerCallbackF32 = dyn Fn(ResampleRequestF32) -> Vec<f32>;
+pub type ResamplerCallbackF64 = dyn Fn(ResampleRequestF64) -> Vec<f64>;
 
 pub struct HydrogenSrc {
     work_dir: PathBuf,
@@ -89,14 +92,14 @@ impl HydrogenSrc {
 
     pub fn set_callback_f32<F>(&mut self, callback: F)
     where
-        F: FnMut(ResampleRequestF32) -> Vec<f32> + 'static,
+        F: Fn(ResampleRequestF32) -> Vec<f32> + 'static,
     {
         self.callback_f32 = Some(Box::new(callback));
     }
 
     pub fn set_callback_f64<F>(&mut self, callback: F)
     where
-        F: FnMut(ResampleRequestF64) -> Vec<f64> + 'static,
+        F: Fn(ResampleRequestF64) -> Vec<f64> + 'static,
     {
         self.callback_f64 = Some(Box::new(callback));
     }
@@ -109,19 +112,19 @@ impl HydrogenSrc {
 
         match self.float_variant {
             FloatVariant::F32 => {
-                let mut callback = self
+                let callback = self
                     .callback_f32
                     .take()
                     .ok_or(HydrogenError::MissingCallbackF32)?;
-                self.run_f32(callback.as_mut())?;
+                self.run_f32(callback.as_ref())?;
                 self.callback_f32 = Some(callback);
             }
             FloatVariant::F64 => {
-                let mut callback = self
+                let callback = self
                     .callback_f64
                     .take()
                     .ok_or(HydrogenError::MissingCallbackF64)?;
-                self.run_f64(callback.as_mut())?;
+                self.run_f64(callback.as_ref())?;
                 self.callback_f64 = Some(callback);
             }
         }
@@ -133,7 +136,7 @@ impl HydrogenSrc {
         Ok(output_zip)
     }
 
-    fn run_f32(&self, callback: &mut ResamplerCallbackF32) -> Result<(), HydrogenError> {
+    fn run_f32(&self, callback: &ResamplerCallbackF32) -> Result<(), HydrogenError> {
         for input_file in list_wavs(&self.sample_pack_dir()?)? {
             let mut wav = Wav::<f32>::from_path(&input_file)?;
             let request = ResampleRequestF32 {
@@ -155,7 +158,7 @@ impl HydrogenSrc {
         Ok(())
     }
 
-    fn run_f64(&self, callback: &mut ResamplerCallbackF64) -> Result<(), HydrogenError> {
+    fn run_f64(&self, callback: &ResamplerCallbackF64) -> Result<(), HydrogenError> {
         for input_file in list_wavs(&self.sample_pack_dir()?)? {
             let mut wav = Wav::<f64>::from_path(&input_file)?;
             let request = ResampleRequestF64 {
@@ -285,7 +288,7 @@ impl HydrogenSrc {
     }
 }
 
-fn list_wavs(dir: &Path) -> Result<Vec<PathBuf>, HydrogenError> {
+pub(crate) fn list_wavs(dir: &Path) -> Result<Vec<PathBuf>, HydrogenError> {
     let mut wavs = Vec::new();
     for entry in fs::read_dir(dir)? {
         let path = entry?.path();
@@ -327,4 +330,21 @@ pub enum HydrogenError {
     MissingCallbackF64,
     #[error("path has no file name: '{0}'")]
     MissingFileName(PathBuf),
+    #[error("missing callback for local harness")]
+    MissingLocalCallback,
+    #[error("only one local callback can be set at a time")]
+    ConflictingLocalCallbacks,
+    #[error("octave command was not found on PATH")]
+    MissingOctaveCommand,
+    #[error("required octave packages are missing: {0:?}")]
+    MissingOctavePackages(Vec<String>),
+    #[error("octave command failed during {context}: {stderr}")]
+    OctaveCommandFailed { context: String, stderr: String },
+    #[error("invalid script location: '{0}'")]
+    InvalidScriptLocation(PathBuf),
+    #[error("missing generated sample files in '{sample_dir}': {missing_files:?}")]
+    MissingGeneratedSampleFiles {
+        sample_dir: PathBuf,
+        missing_files: Vec<String>,
+    },
 }

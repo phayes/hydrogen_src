@@ -1,0 +1,13 @@
+this file is created by placing 
+
+TestSignals96KHzto44KHz\44kHzIdealResponse\sweep_1_to_44KHz-64bitfloat.wav
+
+to
+
+
+processing\sweep_1_to_44KHz.wav
+
+
+Then run spectogram_sweep_1_to_44kHz_96kHz_srcto_44kHz.m, after processing, copy the file to TestScripts
+
+Note the top end was manually edited in paint, copy and paste to create a uniform line to the top.

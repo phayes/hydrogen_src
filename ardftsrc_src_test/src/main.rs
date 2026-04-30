@@ -1,8 +1,10 @@
 use std::path::PathBuf;
 
-use clap::{ArgGroup, Parser};
-use hydrogen_src::{FloatVariant, HydrogenError, HydrogenSrc, ResampleRequestF32, ResampleRequestF64};
 use ardftsrc::{Ardftsrc, Config};
+use clap::{ArgGroup, Parser};
+use hydrogen_src::{
+    FloatVariant, HydrogenError, HydrogenSrc, ResampleRequestF32, ResampleRequestF64,
+};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -19,6 +21,8 @@ struct Args {
     quality: usize,
     #[arg(long, default_value_t = 0.95)]
     bandwidth: f32,
+    #[arg(long, default_value_t = 3.45)]
+    alpha: f32,
 }
 
 fn main() -> Result<(), HydrogenError> {
@@ -40,51 +44,61 @@ fn main() -> Result<(), HydrogenError> {
         std::process::exit(2);
     }
 
+    if !(0.0..=f32::MAX).contains(&cli.alpha) || !cli.alpha.is_finite() {
+        eprintln!("--alpha must be finite and in 0.0..={}", f32::MAX);
+        std::process::exit(2);
+    }
+
     let quality = cli.quality;
     let bandwidth = cli.bandwidth;
-
+    let alpha = cli.alpha;
+    
     let mut hydrogen = HydrogenSrc::new(
         cli.workdir,
         float_variant,
-        &format!("output-ardftsrc-q{}-bw{bandwidth:.2}", quality),
+        &format!("output-ardftsrc-q{quality}-bw{bandwidth:.2}-a{alpha:.2}"),
     );
 
     hydrogen.set_callback_f32(move |request: ResampleRequestF32| -> Vec<f32> {
-        run_ardftsrc_f32(request, quality, bandwidth)
+        run_ardftsrc_f32(request, quality, bandwidth, alpha)
     });
     hydrogen.set_callback_f64(move |request: ResampleRequestF64| -> Vec<f64> {
-        run_ardftsrc_f64(request, quality, bandwidth)
+        run_ardftsrc_f64(request, quality, bandwidth, alpha)
     });
 
     let _ = hydrogen.run()?;
     Ok(())
 }
 
-fn run_ardftsrc_f32(request: ResampleRequestF32, quality: usize, bandwidth: f32) -> Vec<f32> {
+fn run_ardftsrc_f32(request: ResampleRequestF32, quality: usize, bandwidth: f32, alpha: f32) -> Vec<f32> {
     let config = Config {
         input_sample_rate: request.sample_rate,
         output_sample_rate: request.target_sample_rate,
         channels: request.channels,
         quality,
         bandwidth,
+        alpha,
     };
 
-    let mut resampler = Ardftsrc::<f32>::new(config).expect("failed to create ardftsrc f32 resampler");
+    let mut resampler =
+        Ardftsrc::<f32>::new(config).expect("failed to create ardftsrc f32 resampler");
     resampler
         .process_all(&request.samples)
         .expect("failed during ardftsrc f32 processing")
 }
 
-fn run_ardftsrc_f64(request: ResampleRequestF64, quality: usize, bandwidth: f32) -> Vec<f64> {
+fn run_ardftsrc_f64(request: ResampleRequestF64, quality: usize, bandwidth: f32, alpha: f32) -> Vec<f64> {
     let config = Config {
         input_sample_rate: request.sample_rate,
         output_sample_rate: request.target_sample_rate,
         channels: request.channels,
         quality,
         bandwidth,
+        alpha,
     };
 
-    let mut resampler = Ardftsrc::<f64>::new(config).expect("failed to create ardftsrc f64 resampler");
+    let mut resampler =
+        Ardftsrc::<f64>::new(config).expect("failed to create ardftsrc f64 resampler");
     resampler
         .process_all(&request.samples)
         .expect("failed during ardftsrc f64 processing")

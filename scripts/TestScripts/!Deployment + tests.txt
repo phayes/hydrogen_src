@@ -1,0 +1,57 @@
+=================
+Pre-requirements  
+
+Install Octave		 https://octave.org/
+	run octave (select software open-cl software render)
+	in command window paste:
+
+		pkg install signal -forge
+		pkg install data-smoothing -forge
+
+	the file C:\Program Files\GNU Octave\Octave-10.3.0\mingw64\share\octave\site\m\startup\octaverc
+		add the line before last few:
+
+			pkg load signal
+
+==============================================
+96KHz DOWN SAMPLE to 44.1KHz
+==============================================
+
+
+----------------------------------------------
+Impulse
+----------------------------------------------
+
+A signal with a sample rate of 96 kHz is downsampled to 44.1 kHz. The signal x[n]
+consists of 96000 gcd(96000,44100) = 320 unit impulses with enough space between them. The im-
+pulses are at sample positions n so that {n mod 320} is a permutation of {0, 1, 2, . . . , 319}.
+This basically means that all fractional differences in sample positions between input
+and output signal are addressed exactly once. In the later analysis the output signal is
+upsampled (by inserting zeros) to lcm(96000, 44100) = 14.112 MHz and the impulse re-
+sponses are added to obtain a high resolution impulse response, which is also inspected
+in the frequency domain in phase and magnitude utilizing the DF
+
+
+----------------------------------------------
+Sine Sweep  'sweep-1-48KHz (96KHz Float).wav'
+----------------------------------------------
+
+"A sweep signal with a linear slope of 1 kHz/s from 1 Hz to 44 kHz at a sample rate of
+96 kHz is downsampled to 44.1 kHz. Again the spectogram is plotted for analysis to
+evaluate aliasing effects and filter cutoff."
+
+
+----------------------------------------------
+Aliasing Test
+----------------------------------------------
+
+A 23 kHz sine at −4 dBFS for 20 seconds  with a white noise floor of −150 dBFS over 30 seconds is downsampled from 96 kHz to 44.1 kHz. The resulting signal is analysed using Welch’s method with 4 segments, an overlap of 50 %, and a Hann window.
+
+
+----------------------------------------------
+Intermodulation:
+----------------------------------------------
+
+Again equals the Aliasing test with the difference that the sine is replaced by two sines,
+one at 60 Hz, −6 dBFS and the second at 7 kHz, −18.0412 dBFS, which equals quarter
+the amplitude of the first sine.
