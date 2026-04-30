@@ -17,6 +17,8 @@ cargo run -p rubato_src_test -- --workdir=./workspace --local --json # Run analy
 
 - `--workdir`: input/output workspace directory
 - `--f64`: use `f64` pipeline (`f32` is default)
+- `--local`: use local anslysis toolbox. Needs "octave" commandline inistalled
+- `--json`: When running local analysis, report results in json format to allow automation
 
 ## Rubato Params
 - `--chunk-size`: rubato chunk-size
