@@ -90,6 +90,7 @@ dependencies = [
  "ardftsrc",
  "clap",
  "hydrogen_src",
+ "serde_json",
 ]
 
 [[package]]
@@ -741,6 +742,7 @@ name = "hydrogen_src"
 version = "0.1.0"
 dependencies = [
  "reqwest",
+ "serde",
  "thiserror 2.0.18",
  "wavers",
  "zip",
@@ -1459,6 +1461,7 @@ dependencies = [
  "clap",
  "hydrogen_src",
  "rubato",
+ "serde_json",
 ]
 
 [[package]]

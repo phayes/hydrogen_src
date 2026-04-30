@@ -14,18 +14,23 @@ const LOCAL_SCRIPT_DIR: &str = "scripts/TestScripts";
     group(ArgGroup::new("float-variant").args(["f32", "f64"]))
 )]
 struct Args {
+    // General options
     #[arg(long)]
     workdir: PathBuf,
     #[arg(long)]
     f32: bool,
     #[arg(long)]
     f64: bool,
+    #[arg(long, default_value_t = false)]
+    local: bool,
+    #[arg(long, default_value_t = false)]
+    json: bool,
+
+    // Rubato options
     #[arg(long, default_value_t = 512)]
     chunk_size: usize,
     #[arg(long, default_value_t = 1)]
     sub_chunk: usize,
-    #[arg(long, default_value_t = false)]
-    local: bool,
 }
 
 fn main() -> Result<(), HydrogenError> {
@@ -59,9 +64,16 @@ fn main() -> Result<(), HydrogenError> {
                 });
             }
         }
-        local.run()?;
+        let results = local.run()?;
+        if cli.json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&results).expect("failed to serialize local results")
+            );
+        } else {
+            println!("{results}");
+        }
         return Ok(());
-
     // Remote upload mode (default)
     } else {
         let mut hydrogen = HydrogenSrc::new(

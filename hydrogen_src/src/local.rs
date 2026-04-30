@@ -2,7 +2,10 @@ use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::{collections::BTreeMap, ffi::OsStr};
+use std::fmt;
 
+use serde::{Deserialize, Serialize};
 use wavers::{Wav, write};
 
 use crate::{FloatVariant, HydrogenError, ResampleRequestF32, ResampleRequestF64, ResamplerCallbackF32, ResamplerCallbackF64, list_wavs};
@@ -33,6 +36,72 @@ const ANALYSIS_SCRIPTS: [&str; 6] = [
 ];
 
 static PRECHECK_AND_GENERATION_DONE: AtomicBool = AtomicBool::new(false);
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LocalTestResults {
+    pub average_score: f64,
+    pub quality: BTreeMap<String, f64>,
+    pub figures: Vec<PathBuf>,
+}
+
+impl fmt::Display for LocalTestResults {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "Average score: {}", self.average_score)?;
+        writeln!(f, "Scores:")?;
+        for (name, value) in &self.quality {
+            writeln!(f, "- {}: {}", name, value)?;
+        }
+        writeln!(f, "Figures:")?;
+        for figure in &self.figures {
+            writeln!(f, "- {}", figure.display())?;
+        }
+        Ok(())
+    }
+}
+
+impl LocalTestResults {
+    pub fn from_analysis_dir(analysis_dir: impl Into<PathBuf>) -> Result<Self, HydrogenError> {
+        let analysis_dir = absolutize_path(analysis_dir.into())?;
+        if !analysis_dir.is_dir() {
+            return Err(HydrogenError::InvalidScriptLocation(analysis_dir));
+        }
+
+        let mut quality = BTreeMap::new();
+        let mut figures = Vec::new();
+
+        for entry in fs::read_dir(&analysis_dir)? {
+            let path = entry?.path();
+            if !path.is_file() {
+                continue;
+            }
+
+            if is_quality_file(&path) {
+                let key = quality_key_from_path(&path)?;
+                let value = parse_last_nonempty_line_as_f64(&path)?;
+                quality.insert(key, value);
+                continue;
+            }
+
+            if has_extension(&path, "png") {
+                figures.push(absolutize_path(path)?);
+            }
+        }
+
+        figures.sort();
+        let average_score = average_quality_score(&quality);
+        Ok(Self {
+            quality,
+            figures,
+            average_score,
+        })
+    }
+
+    pub fn from_workspace_dir(workspace_dir: impl Into<PathBuf>) -> Result<Self, HydrogenError> {
+        let workspace_dir = absolutize_path(workspace_dir.into())?;
+        let analysis_dir = workspace_dir.join(DEFAULT_ANALYSIS_OUTPUT_SUBDIR);
+        Self::from_analysis_dir(analysis_dir)
+    }
+}
 
 pub struct LocalHarness {
     workspace: PathBuf,
@@ -65,7 +134,7 @@ impl LocalHarness {
         self.callback_f64 = Some(Box::new(callback));
     }
 
-    pub fn run(&mut self) -> Result<(), HydrogenError> {
+    pub fn run(&mut self) -> Result<LocalTestResults, HydrogenError> {
         fs::create_dir_all(self.workspace_dir()?)?;
 
         let has_f32 = self.callback_f32.is_some();
@@ -89,7 +158,7 @@ impl LocalHarness {
             self.copy_references()?;
             self.callback_f32 = Some(callback);
             self.run_analysis()?;
-            return Ok(());
+            return LocalTestResults::from_analysis_dir(self.analysis_output_dir()?);
         }
 
         if has_f64 {
@@ -102,7 +171,7 @@ impl LocalHarness {
             self.copy_references()?;
             self.callback_f64 = Some(callback);
             self.run_analysis()?;
-            return Ok(());
+            return LocalTestResults::from_analysis_dir(self.analysis_output_dir()?);
         }
 
         Err(HydrogenError::MissingLocalCallback)
@@ -472,4 +541,63 @@ fn file_name_from_path(path: &Path) -> Result<PathBuf, HydrogenError> {
 fn dir_has_entries(path: &Path) -> Result<bool, HydrogenError> {
     let mut entries = fs::read_dir(path)?;
     Ok(entries.next().transpose()?.is_some())
+}
+
+fn has_extension(path: &Path, extension: &str) -> bool {
+    path.extension()
+        .and_then(OsStr::to_str)
+        .is_some_and(|ext| ext.eq_ignore_ascii_case(extension))
+}
+
+fn is_quality_file(path: &Path) -> bool {
+    let name_matches = path
+        .file_name()
+        .and_then(OsStr::to_str)
+        .is_some_and(|name| name.starts_with("quality-"));
+    name_matches && has_extension(path, "txt")
+}
+
+fn quality_key_from_path(path: &Path) -> Result<String, HydrogenError> {
+    let stem = path
+        .file_stem()
+        .and_then(OsStr::to_str)
+        .ok_or_else(|| HydrogenError::MissingFileName(path.to_path_buf()))?;
+    Ok(stem.strip_prefix("quality-").unwrap_or(stem).to_string())
+}
+
+fn parse_last_nonempty_line_as_f64(path: &Path) -> Result<f64, HydrogenError> {
+    let contents = fs::read_to_string(path)?;
+    let last_line = contents
+        .trim_end()
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .last()
+        .ok_or_else(|| HydrogenError::EmptyQualityMetric {
+            path: path.to_path_buf(),
+        })?;
+
+    last_line
+        .parse::<f64>()
+        .map_err(|_| HydrogenError::InvalidQualityMetric {
+            path: path.to_path_buf(),
+            value: last_line.to_string(),
+        })
+}
+
+fn absolutize_path(path: PathBuf) -> Result<PathBuf, HydrogenError> {
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        Ok(std::env::current_dir()?.join(path))
+    }
+}
+
+fn average_quality_score(quality: &BTreeMap<String, f64>) -> f64 {
+    if quality.is_empty() {
+        return 0.0;
+    }
+
+    let sum: f64 = quality.values().copied().sum();
+    sum / (quality.len() as f64)
 }

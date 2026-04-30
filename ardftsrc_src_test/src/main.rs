@@ -3,20 +3,29 @@ use std::path::PathBuf;
 use ardftsrc::{Ardftsrc, Config};
 use clap::{ArgGroup, Parser};
 use hydrogen_src::{
-    FloatVariant, HydrogenError, HydrogenSrc, ResampleRequestF32, ResampleRequestF64,
+    FloatVariant, HydrogenError, HydrogenSrc, LocalHarness, ResampleRequestF32, ResampleRequestF64,
 };
+
+const LOCAL_SCRIPT_DIR: &str = "scripts/TestScripts";
 
 #[derive(Debug, Parser)]
 #[command(
     group(ArgGroup::new("float-variant").args(["f32", "f64"]))
 )]
 struct Args {
+    // General options
     #[arg(long)]
     workdir: PathBuf,
     #[arg(long)]
     f32: bool,
     #[arg(long)]
     f64: bool,
+    #[arg(long, default_value_t = false)]
+    local: bool,
+    #[arg(long, default_value_t = false)]
+    json: bool,
+
+    // Ardftsrc options
     #[arg(long, default_value_t = 2048)]
     quality: usize,
     #[arg(long, default_value_t = 0.95)]
@@ -53,6 +62,32 @@ fn main() -> Result<(), HydrogenError> {
     let bandwidth = cli.bandwidth;
     let alpha = cli.alpha;
     
+    if cli.local {
+        let mut local = LocalHarness::new(cli.workdir, LOCAL_SCRIPT_DIR);
+        match float_variant {
+            FloatVariant::F32 => {
+                local.set_callback_f32(move |request: ResampleRequestF32| -> Vec<f32> {
+                    run_ardftsrc_f32(request, quality, bandwidth, alpha)
+                });
+            }
+            FloatVariant::F64 => {
+                local.set_callback_f64(move |request: ResampleRequestF64| -> Vec<f64> {
+                    run_ardftsrc_f64(request, quality, bandwidth, alpha)
+                });
+            }
+        }
+        let results = local.run()?;
+        if cli.json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&results).expect("failed to serialize local results")
+            );
+        } else {
+            println!("{results}");
+        }
+        return Ok(());
+    }
+
     let mut hydrogen = HydrogenSrc::new(
         cli.workdir,
         float_variant,

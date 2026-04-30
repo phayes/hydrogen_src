@@ -9,6 +9,7 @@ use zip::write::SimpleFileOptions;
 
 pub mod local;
 pub use local::LocalHarness;
+pub use local::LocalTestResults;
 
 const TARGET_OUTPUT_SAMPLE_RATE: usize = 44_100;
 
@@ -347,4 +348,8 @@ pub enum HydrogenError {
         sample_dir: PathBuf,
         missing_files: Vec<String>,
     },
+    #[error("quality metric file has no non-empty lines: '{path}'")]
+    EmptyQualityMetric { path: PathBuf },
+    #[error("failed to parse quality metric in '{path}' from '{value}'")]
+    InvalidQualityMetric { path: PathBuf, value: String },
 }
