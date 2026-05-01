@@ -1,19 +1,23 @@
+use std::ffi::OsStr;
+use std::fmt;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::{collections::BTreeMap, ffi::OsStr};
-use std::fmt;
 
 use serde::{Deserialize, Serialize};
-use wavers::{Wav, write};
+use wavers::Wav;
 
-use crate::{FloatVariant, HydrogenError, ResampleRequestF32, ResampleRequestF64, ResamplerCallbackF32, ResamplerCallbackF64, list_wavs};
+use crate::{
+    FloatVariant, HydrogenError, ResampleRequestF32, ResampleRequestF64, ResamplerCallbackF32,
+    ResamplerCallbackF64, list_wavs, write_f32_with_wav_encoding, write_f64_with_wav_encoding,
+};
 
 const TARGET_OUTPUT_SAMPLE_RATE: usize = 44_100;
 const DEFAULT_SAMPLE_SUBDIR: &str = "local_test_generated_samples";
 const DEFAULT_OUTPUT_SUBDIR: &str = "local_test_output";
 const DEFAULT_ANALYSIS_OUTPUT_SUBDIR: &str = "analysis_output";
+const CALCULATED_DELAY_FILENAME: &str = "calculateddelay.txt";
 const REFERENCE_SPECTROGRAM_PNG: &str = "sweep-1-to-44KHz-1to11secHighRES-REF.png";
 const GENERATOR_SUBDIR: &str = "TestSignals96KHzto44KHz";
 const INTERNAL_IMPULSE_REFERENCE_WAV: &str = "impulse-64bitfloat-InternalUse.wav";
@@ -40,17 +44,50 @@ static PRECHECK_AND_GENERATION_DONE: AtomicBool = AtomicBool::new(false);
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LocalTestResults {
     pub average_score: f64,
-    pub quality: BTreeMap<String, f64>,
+    #[serde(default)]
+    pub balanced_score: f64,
+    #[serde(default = "nan_f64")]
+    pub spectrogram_score: f64,
+    #[serde(default = "nan_f64")]
+    pub bandwidth_score: f64,
+    #[serde(default = "nan_f64")]
+    pub impulse_freq_score: f64,
+    #[serde(default = "nan_f64")]
+    pub average_impulse_freq: f64,
+    #[serde(default = "nan_f64")]
+    pub alias_score: f64,
+    #[serde(default = "nan_f64")]
+    pub preringing_score: f64,
+    #[serde(default = "nan_f64")]
+    pub gapless_score: f64,
+    #[serde(default = "nan_f64")]
+    pub intermoddiff_score: f64,
+    #[serde(default = "nan_f64")]
+    pub delay_score: f64,
+    #[serde(default = "nan_f64")]
+    pub delay_samples: f64,
     pub figures: Vec<PathBuf>,
 }
 
 impl fmt::Display for LocalTestResults {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "Average score: {}", self.average_score)?;
+        writeln!(f, "Balanced score: {}", self.balanced_score)?;
+        writeln!(
+            f,
+            "Average impulse freq: {} db",
+            self.average_impulse_freq
+        )?;
+        writeln!(f, "Delay: {} samples", self.delay_samples)?;
         writeln!(f, "Scores:")?;
-        for (name, value) in &self.quality {
-            writeln!(f, "- {}: {}", name, value)?;
-        }
+        writeln!(f, "- spectrogram: {}", self.spectrogram_score)?;
+        writeln!(f, "- bandwidth: {}", self.bandwidth_score)?;
+        writeln!(f, "- impulse_freq: {}", self.impulse_freq_score)?;
+        writeln!(f, "- alias: {}", self.alias_score)?;
+        writeln!(f, "- preringing: {}", self.preringing_score)?;
+        writeln!(f, "- gapless: {}", self.gapless_score)?;
+        writeln!(f, "- intermoddiff: {}", self.intermoddiff_score)?;
+        writeln!(f, "- delay: {}", self.delay_score)?;
         writeln!(f, "Figures:")?;
         for figure in &self.figures {
             writeln!(f, "- {}", figure.display())?;
@@ -66,7 +103,16 @@ impl LocalTestResults {
             return Err(HydrogenError::InvalidScriptLocation(analysis_dir));
         }
 
-        let mut quality = BTreeMap::new();
+        let mut spectrogram_score = f64::NAN;
+        let mut bandwidth_score = f64::NAN;
+        let mut impulse_freq_score = f64::NAN;
+        let mut average_impulse_freq = f64::NAN;
+        let mut alias_score = f64::NAN;
+        let mut preringing_score = f64::NAN;
+        let mut gapless_score = f64::NAN;
+        let mut intermoddiff_score = f64::NAN;
+        let mut delay_score = f64::NAN;
+        let mut delay_samples = f64::NAN;
         let mut figures = Vec::new();
 
         for entry in fs::read_dir(&analysis_dir)? {
@@ -75,11 +121,39 @@ impl LocalTestResults {
                 continue;
             }
 
-            if is_quality_file(&path) {
-                let key = quality_key_from_path(&path)?;
-                let value = parse_last_nonempty_line_as_f64(&path)?;
-                quality.insert(key, value);
-                continue;
+            let file_name = path
+                .file_name()
+                .and_then(OsStr::to_str)
+                .ok_or_else(|| HydrogenError::MissingFileName(path.clone()))?;
+            match file_name {
+                "quality-spectrogram.txt" => {
+                    spectrogram_score = parse_file(&path, 0)?;
+                }
+                "quality-bandwidth.txt" => {
+                    bandwidth_score = parse_file(&path, 0)?;
+                }
+                "quality-impulse_freq.txt" => {
+                    average_impulse_freq = parse_file(&path, 0)?;
+                    impulse_freq_score = parse_file(&path, 1)?;
+                }
+                "quality-alias.txt" => {
+                    alias_score = parse_file(&path, 0)?;
+                }
+                "quality-preringing.txt" => {
+                    preringing_score = parse_file(&path, 0)?;
+                }
+                "quality-gapless.txt" => {
+                    gapless_score = parse_file(&path, 0)?;
+                }
+                "quality-intermoddiff.txt" => {
+                    intermoddiff_score = parse_file(&path, 0)?;
+                }
+                CALCULATED_DELAY_FILENAME => {
+                    let raw_delay = parse_file(&path, 0)?;
+                    delay_samples = raw_delay;
+                    delay_score = delay_score_from_normalized(raw_delay);
+                }
+                _ => {}
             }
 
             if has_extension(&path, "png") {
@@ -88,11 +162,41 @@ impl LocalTestResults {
         }
 
         figures.sort();
-        let average_score = average_quality_score(&quality);
+        let quality_scores = [
+            spectrogram_score,
+            bandwidth_score,
+            impulse_freq_score,
+            average_impulse_freq,
+            alias_score,
+            preringing_score,
+            gapless_score,
+            intermoddiff_score,
+        ];
+        let average_score = average_quality_score(&quality_scores);
+        let balanced_score = balanced_quality_score(
+            spectrogram_score,
+            bandwidth_score,
+            impulse_freq_score,
+            alias_score,
+            preringing_score,
+            gapless_score,
+            intermoddiff_score,
+            delay_score,
+        );
         Ok(Self {
-            quality,
             figures,
             average_score,
+            balanced_score,
+            spectrogram_score,
+            bandwidth_score,
+            impulse_freq_score,
+            average_impulse_freq,
+            alias_score,
+            preringing_score,
+            gapless_score,
+            intermoddiff_score,
+            delay_score,
+            delay_samples,
         })
     }
 
@@ -197,6 +301,7 @@ impl LocalHarness {
     fn run_f32(&self, callback: &ResamplerCallbackF32) -> Result<(), HydrogenError> {
         for input_file in list_wavs(&self.sample_input_dir(FloatVariant::F32)?)? {
             let mut wav = Wav::<f32>::from_path(&input_file)?;
+            let input_encoding = wav.encoding();
             let request = ResampleRequestF32 {
                 sample_rate: wav.sample_rate() as usize,
                 channels: wav.n_channels() as usize,
@@ -206,11 +311,12 @@ impl LocalHarness {
             let output_sample_rate = request.target_sample_rate as i32;
             let output_channels = request.channels as u16;
             let output_samples = callback(request);
-            write(
+            write_f32_with_wav_encoding(
                 &self.output_dir()?.join(file_name_from_path(&input_file)?),
                 &output_samples,
                 output_sample_rate,
                 output_channels,
+                input_encoding,
             )?;
         }
         Ok(())
@@ -219,6 +325,7 @@ impl LocalHarness {
     fn run_f64(&self, callback: &ResamplerCallbackF64) -> Result<(), HydrogenError> {
         for input_file in list_wavs(&self.sample_input_dir(FloatVariant::F64)?)? {
             let mut wav = Wav::<f64>::from_path(&input_file)?;
+            let input_encoding = wav.encoding();
             let request = ResampleRequestF64 {
                 sample_rate: wav.sample_rate() as usize,
                 channels: wav.n_channels() as usize,
@@ -228,11 +335,12 @@ impl LocalHarness {
             let output_sample_rate = request.target_sample_rate as i32;
             let output_channels = request.channels as u16;
             let output_samples = callback(request);
-            write(
+            write_f64_with_wav_encoding(
                 &self.output_dir()?.join(file_name_from_path(&input_file)?),
                 &output_samples,
                 output_sample_rate,
                 output_channels,
+                input_encoding,
             )?;
         }
         Ok(())
@@ -418,7 +526,6 @@ impl LocalHarness {
     }
 
     fn copy_references(&self) -> Result<(), HydrogenError> {
-
         // Copy wav references
         let sample_dir = self.sample_dir()?;
         let output_dir = self.output_dir()?;
@@ -432,10 +539,7 @@ impl LocalHarness {
         if !reference_png.is_file() {
             return Err(HydrogenError::InvalidScriptLocation(reference_png));
         }
-        fs::copy(
-            &reference_png,
-            output_dir.join(REFERENCE_SPECTROGRAM_PNG),
-        )?;
+        fs::copy(&reference_png, output_dir.join(REFERENCE_SPECTROGRAM_PNG))?;
 
         Ok(())
     }
@@ -549,39 +653,21 @@ fn has_extension(path: &Path, extension: &str) -> bool {
         .is_some_and(|ext| ext.eq_ignore_ascii_case(extension))
 }
 
-fn is_quality_file(path: &Path) -> bool {
-    let name_matches = path
-        .file_name()
-        .and_then(OsStr::to_str)
-        .is_some_and(|name| name.starts_with("quality-"));
-    name_matches && has_extension(path, "txt")
-}
-
-fn quality_key_from_path(path: &Path) -> Result<String, HydrogenError> {
-    let stem = path
-        .file_stem()
-        .and_then(OsStr::to_str)
-        .ok_or_else(|| HydrogenError::MissingFileName(path.to_path_buf()))?;
-    Ok(stem.strip_prefix("quality-").unwrap_or(stem).to_string())
-}
-
-fn parse_last_nonempty_line_as_f64(path: &Path) -> Result<f64, HydrogenError> {
+fn parse_file(path: &Path, line_num: usize) -> Result<f64, HydrogenError> {
     let contents = fs::read_to_string(path)?;
-    let last_line = contents
-        .trim_end()
+    let truncated = contents.trim_end();
+    let line = truncated
         .lines()
+        .nth(line_num)
         .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .last()
         .ok_or_else(|| HydrogenError::EmptyQualityMetric {
             path: path.to_path_buf(),
         })?;
 
-    last_line
-        .parse::<f64>()
+    line.parse::<f64>()
         .map_err(|_| HydrogenError::InvalidQualityMetric {
             path: path.to_path_buf(),
-            value: last_line.to_string(),
+            value: line.to_string(),
         })
 }
 
@@ -593,11 +679,60 @@ fn absolutize_path(path: PathBuf) -> Result<PathBuf, HydrogenError> {
     }
 }
 
-fn average_quality_score(quality: &BTreeMap<String, f64>) -> f64 {
-    if quality.is_empty() {
+fn average_quality_score(quality_scores: &[f64]) -> f64 {
+    if quality_scores.is_empty() {
         return 0.0;
     }
 
-    let sum: f64 = quality.values().copied().sum();
-    sum / (quality.len() as f64)
+    let sum: f64 = quality_scores.iter().copied().sum();
+    sum / (quality_scores.len() as f64)
+}
+
+fn balanced_quality_score(
+    spectrogram_score: f64,
+    bandwidth_score: f64,
+    impulse_freq_score: f64,
+    alias_score: f64,
+    preringing_score: f64,
+    gapless_score: f64,
+    intermoddiff_score: f64,
+    delay_score: f64,
+) -> f64 {
+    const SPECTROGRAM_WEIGHT: f64 = 100.0;
+    const BANDWIDTH_WEIGHT: f64 = 100.0;
+    const IMPULSE_FREQUENCY_WEIGHT: f64 = 60.0;
+    const ALIASING_WEIGHT: f64 = 75.0;
+    const PRE_RINGING_WEIGHT: f64 = 0.0;
+    const DELAY_WEIGHT: f64 = 20.0;
+    const GAPLESS_WEIGHT: f64 = 20.0;
+    const INTERMODULATION_WEIGHT: f64 = 60.0;
+
+    let weighted_sum = spectrogram_score * SPECTROGRAM_WEIGHT
+        + bandwidth_score * BANDWIDTH_WEIGHT
+        + impulse_freq_score * IMPULSE_FREQUENCY_WEIGHT
+        + alias_score * ALIASING_WEIGHT
+        + preringing_score * PRE_RINGING_WEIGHT
+        + delay_score * DELAY_WEIGHT
+        + gapless_score * GAPLESS_WEIGHT
+        + intermoddiff_score * INTERMODULATION_WEIGHT;
+
+    let total_weight = SPECTROGRAM_WEIGHT
+        + BANDWIDTH_WEIGHT
+        + IMPULSE_FREQUENCY_WEIGHT
+        + ALIASING_WEIGHT
+        + PRE_RINGING_WEIGHT
+        + DELAY_WEIGHT
+        + GAPLESS_WEIGHT
+        + INTERMODULATION_WEIGHT;
+
+    weighted_sum / total_weight
+}
+
+fn nan_f64() -> f64 {
+    f64::NAN
+}
+
+fn delay_score_from_normalized(value: f64) -> f64 {
+    let clamped = value.clamp(0.0, 1.0);
+    ((1.0 - clamped) * 100.0).max(0.0)
 }
