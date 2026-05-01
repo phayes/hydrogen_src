@@ -25,6 +25,8 @@ struct Args {
     local: bool,
     #[arg(long, default_value_t = false)]
     json: bool,
+    #[arg(long, default_value_t = false)]
+    score_only: bool,
 
     // Rubato options
     #[arg(long, default_value_t = 512)]
@@ -65,10 +67,12 @@ fn main() -> Result<(), HydrogenError> {
             }
         }
         let results = local.run()?;
-        if cli.json {
+        if cli.score_only {
+            println!("{}", results.balanced_score);
+        } else if cli.json {
             println!(
                 "{}",
-                serde_json::to_string_pretty(&results).expect("failed to serialize local results")
+                serde_json::to_string(&results).expect("failed to serialize local results")
             );
         } else {
             println!("{results}");
