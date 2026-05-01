@@ -2,9 +2,11 @@ use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
+use i24::i24;
 use reqwest::blocking::Client;
 use thiserror::Error;
-use wavers::{Wav, write};
+use wavers::wav_type::WavType;
+use wavers::{Samples, Wav, write};
 use zip::write::SimpleFileOptions;
 
 pub mod local;
@@ -140,6 +142,7 @@ impl HydrogenSrc {
     fn run_f32(&self, callback: &ResamplerCallbackF32) -> Result<(), HydrogenError> {
         for input_file in list_wavs(&self.sample_pack_dir()?)? {
             let mut wav = Wav::<f32>::from_path(&input_file)?;
+            let input_encoding = wav.encoding();
             let request = ResampleRequestF32 {
                 sample_rate: wav.sample_rate() as usize,
                 channels: wav.n_channels() as usize,
@@ -149,11 +152,12 @@ impl HydrogenSrc {
             let output_sample_rate = request.target_sample_rate as i32;
             let output_channels = request.channels as u16;
             let output_samples = callback(request);
-            write(
+            write_f32_with_wav_encoding(
                 &self.output_dir()?.join(file_name_from_path(&input_file)?),
                 &output_samples,
                 output_sample_rate,
                 output_channels,
+                input_encoding,
             )?;
         }
         Ok(())
@@ -162,6 +166,7 @@ impl HydrogenSrc {
     fn run_f64(&self, callback: &ResamplerCallbackF64) -> Result<(), HydrogenError> {
         for input_file in list_wavs(&self.sample_pack_dir()?)? {
             let mut wav = Wav::<f64>::from_path(&input_file)?;
+            let input_encoding = wav.encoding();
             let request = ResampleRequestF64 {
                 sample_rate: wav.sample_rate() as usize,
                 channels: wav.n_channels() as usize,
@@ -171,11 +176,12 @@ impl HydrogenSrc {
             let output_sample_rate = request.target_sample_rate as i32;
             let output_channels = request.channels as u16;
             let output_samples = callback(request);
-            write(
+            write_f64_with_wav_encoding(
                 &self.output_dir()?.join(file_name_from_path(&input_file)?),
                 &output_samples,
                 output_sample_rate,
                 output_channels,
+                input_encoding,
             )?;
         }
         Ok(())
@@ -269,7 +275,11 @@ impl HydrogenSrc {
     }
 
     fn output_dir(&self) -> Result<PathBuf, HydrogenError> {
-        Ok(self.absolute_work_dir()?.join("output"))
+        Ok(self.absolute_work_dir()?.join(format!(
+            "{}-{}",
+            self.output_zip_basename,
+            self.float_variant.slug()
+        )))
     }
 
     fn output_zip_path(&self) -> Result<PathBuf, HydrogenError> {
@@ -287,6 +297,68 @@ impl HydrogenSrc {
             self.float_variant.slug()
         ))
     }
+}
+
+pub(crate) fn write_f32_with_wav_encoding (
+    output_path: &Path,
+    output_samples: &[f32],
+    output_sample_rate: i32,
+    output_channels: u16,
+    input_encoding: WavType,
+) -> Result<(), HydrogenError> {
+    match input_encoding {
+        WavType::Pcm16 | WavType::EPcm16 => {
+            let converted: Samples<i16> = Samples::from(output_samples).convert();
+            write(output_path, &converted, output_sample_rate, output_channels)?;
+        }
+        WavType::Pcm24 | WavType::EPcm24 => {
+            let converted: Samples<i24> = Samples::from(output_samples).convert();
+            write(output_path, &converted, output_sample_rate, output_channels)?;
+        }
+        WavType::Pcm32 | WavType::EPcm32 => {
+            let converted: Samples<i32> = Samples::from(output_samples).convert();
+            write(output_path, &converted, output_sample_rate, output_channels)?;
+        }
+        WavType::Float32 | WavType::EFloat32 => {
+            write(output_path, output_samples, output_sample_rate, output_channels)?;
+        }
+        WavType::Float64 | WavType::EFloat64 => {
+            let converted: Samples<f64> = Samples::from(output_samples).convert();
+            write(output_path, &converted, output_sample_rate, output_channels)?;
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn write_f64_with_wav_encoding(
+    output_path: &Path,
+    output_samples: &[f64],
+    output_sample_rate: i32,
+    output_channels: u16,
+    input_encoding: WavType,
+) -> Result<(), HydrogenError> {
+    match input_encoding {
+        WavType::Pcm16 | WavType::EPcm16 => {
+            let converted: Samples<i16> = Samples::from(output_samples).convert();
+            write(output_path, &converted, output_sample_rate, output_channels)?;
+        }
+        WavType::Pcm24 | WavType::EPcm24 => {
+            let converted: Samples<i24> = Samples::from(output_samples).convert();
+            write(output_path, &converted, output_sample_rate, output_channels)?;
+        }
+        WavType::Pcm32 | WavType::EPcm32 => {
+            let converted: Samples<i32> = Samples::from(output_samples).convert();
+            write(output_path, &converted, output_sample_rate, output_channels)?;
+        }
+        WavType::Float32 | WavType::EFloat32 => {
+            let converted: Samples<f32> = Samples::from(output_samples).convert();
+            write(output_path, &converted, output_sample_rate, output_channels)?;
+        }
+        WavType::Float64 | WavType::EFloat64 => {
+            write(output_path, output_samples, output_sample_rate, output_channels)?;
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn list_wavs(dir: &Path) -> Result<Vec<PathBuf>, HydrogenError> {

@@ -741,6 +741,7 @@ dependencies = [
 name = "hydrogen_src"
 version = "0.1.0"
 dependencies = [
+ "i24",
  "reqwest",
  "serde",
  "thiserror 2.0.18",
