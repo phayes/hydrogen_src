@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+i24 = "1"
 reqwest = { version = "0.13", features = ["blocking"] }
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
