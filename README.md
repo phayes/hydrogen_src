@@ -9,12 +9,16 @@ See: https://src.hydrogenaudio.org/
 ```bash
 cargo run -p rubato_src_test -- --workdir=./workspace
 cargo run -p rubato_src_test -- --workdir=./workspace --f64 --chunk-size=1024 --sub-chunk=2
+cargo run -p rubato_src_test -- --workdir=./workspace --local # Run analysis locally, requires "octave" commandline
+cargo run -p rubato_src_test -- --workdir=./workspace --local --json # Run analysis locally and report output in json for automation
 ```
 
 ## Params
 
 - `--workdir`: input/output workspace directory
 - `--f64`: use `f64` pipeline (`f32` is default)
+- `--local`: use local anslysis toolbox. Needs "octave" commandline inistalled
+- `--json`: When running local analysis, report results in json format to allow automation
 
 ## Rubato Params
 - `--chunk-size`: rubato chunk-size
