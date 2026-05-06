@@ -3,6 +3,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use i24::i24;
+use rayon::prelude::*;
 use reqwest::blocking::Client;
 use thiserror::Error;
 use wavers::wav_type::WavType;
@@ -67,8 +68,10 @@ pub struct ResampleRequestF64 {
     pub target_sample_rate: usize,
 }
 
-pub type ResamplerCallbackF32 = dyn Fn(ResampleRequestF32) -> Vec<f32>;
-pub type ResamplerCallbackF64 = dyn Fn(ResampleRequestF64) -> Vec<f64>;
+pub type ResamplerCallbackF32 =
+    dyn Fn(ResampleRequestF32) -> Vec<f32> + Send + Sync;
+pub type ResamplerCallbackF64 =
+    dyn Fn(ResampleRequestF64) -> Vec<f64> + Send + Sync;
 
 pub struct HydrogenSrc {
     work_dir: PathBuf,
@@ -95,14 +98,14 @@ impl HydrogenSrc {
 
     pub fn set_callback_f32<F>(&mut self, callback: F)
     where
-        F: Fn(ResampleRequestF32) -> Vec<f32> + 'static,
+        F: Fn(ResampleRequestF32) -> Vec<f32> + Send + Sync + 'static,
     {
         self.callback_f32 = Some(Box::new(callback));
     }
 
     pub fn set_callback_f64<F>(&mut self, callback: F)
     where
-        F: Fn(ResampleRequestF64) -> Vec<f64> + 'static,
+        F: Fn(ResampleRequestF64) -> Vec<f64> + Send + Sync + 'static,
     {
         self.callback_f64 = Some(Box::new(callback));
     }
@@ -140,51 +143,67 @@ impl HydrogenSrc {
     }
 
     fn run_f32(&self, callback: &ResamplerCallbackF32) -> Result<(), HydrogenError> {
-        for input_file in list_wavs(&self.sample_pack_dir()?)? {
-            let mut wav = Wav::<f32>::from_path(&input_file)?;
-            let input_encoding = wav.encoding();
-            let request = ResampleRequestF32 {
-                sample_rate: wav.sample_rate() as usize,
-                channels: wav.n_channels() as usize,
-                samples: wav.read()?.to_vec(),
-                target_sample_rate: TARGET_OUTPUT_SAMPLE_RATE,
-            };
-            let output_sample_rate = request.target_sample_rate as i32;
-            let output_channels = request.channels as u16;
-            let output_samples = callback(request);
-            write_f32_with_wav_encoding(
-                &self.output_dir()?.join(file_name_from_path(&input_file)?),
-                &output_samples,
-                output_sample_rate,
-                output_channels,
-                input_encoding,
-            )?;
-        }
-        Ok(())
+        let output_dir = self.output_dir()?;
+        let sample_pack_dir = self.sample_pack_dir()?;
+        let input_files = list_wavs(&sample_pack_dir)?;
+
+        let results: Vec<Result<(), HydrogenError>> = input_files
+            .par_iter()
+            .map(|input_file| {
+                let mut wav = Wav::<f32>::from_path(input_file)?;
+                let input_encoding = wav.encoding();
+                let request = ResampleRequestF32 {
+                    sample_rate: wav.sample_rate() as usize,
+                    channels: wav.n_channels() as usize,
+                    samples: wav.read()?.to_vec(),
+                    target_sample_rate: TARGET_OUTPUT_SAMPLE_RATE,
+                };
+                let output_sample_rate = request.target_sample_rate as i32;
+                let output_channels = request.channels as u16;
+                let output_samples = callback(request);
+                write_f32_with_wav_encoding(
+                    &output_dir.join(file_name_from_path(input_file)?),
+                    &output_samples,
+                    output_sample_rate,
+                    output_channels,
+                    input_encoding,
+                )
+            })
+            .collect();
+
+        results.into_iter().try_for_each(std::convert::identity)
     }
 
     fn run_f64(&self, callback: &ResamplerCallbackF64) -> Result<(), HydrogenError> {
-        for input_file in list_wavs(&self.sample_pack_dir()?)? {
-            let mut wav = Wav::<f64>::from_path(&input_file)?;
-            let input_encoding = wav.encoding();
-            let request = ResampleRequestF64 {
-                sample_rate: wav.sample_rate() as usize,
-                channels: wav.n_channels() as usize,
-                samples: wav.read()?.to_vec(),
-                target_sample_rate: TARGET_OUTPUT_SAMPLE_RATE,
-            };
-            let output_sample_rate = request.target_sample_rate as i32;
-            let output_channels = request.channels as u16;
-            let output_samples = callback(request);
-            write_f64_with_wav_encoding(
-                &self.output_dir()?.join(file_name_from_path(&input_file)?),
-                &output_samples,
-                output_sample_rate,
-                output_channels,
-                input_encoding,
-            )?;
-        }
-        Ok(())
+        let output_dir = self.output_dir()?;
+        let sample_pack_dir = self.sample_pack_dir()?;
+        let input_files = list_wavs(&sample_pack_dir)?;
+
+        let results: Vec<Result<(), HydrogenError>> = input_files
+            .par_iter()
+            .map(|input_file| {
+                let mut wav = Wav::<f64>::from_path(input_file)?;
+                let input_encoding = wav.encoding();
+                let request = ResampleRequestF64 {
+                    sample_rate: wav.sample_rate() as usize,
+                    channels: wav.n_channels() as usize,
+                    samples: wav.read()?.to_vec(),
+                    target_sample_rate: TARGET_OUTPUT_SAMPLE_RATE,
+                };
+                let output_sample_rate = request.target_sample_rate as i32;
+                let output_channels = request.channels as u16;
+                let output_samples = callback(request);
+                write_f64_with_wav_encoding(
+                    &output_dir.join(file_name_from_path(input_file)?),
+                    &output_samples,
+                    output_sample_rate,
+                    output_channels,
+                    input_encoding,
+                )
+            })
+            .collect();
+
+        results.into_iter().try_for_each(std::convert::identity)
     }
 
     fn ensure_sample_pack_downloaded(&self) -> Result<(), HydrogenError> {

@@ -226,14 +226,14 @@ impl LocalHarness {
 
     pub fn set_callback_f32<F>(&mut self, callback: F)
     where
-        F: Fn(ResampleRequestF32) -> Vec<f32> + 'static,
+        F: Fn(ResampleRequestF32) -> Vec<f32> + Send + Sync + 'static,
     {
         self.callback_f32 = Some(Box::new(callback));
     }
 
     pub fn set_callback_f64<F>(&mut self, callback: F)
     where
-        F: Fn(ResampleRequestF64) -> Vec<f64> + 'static,
+        F: Fn(ResampleRequestF64) -> Vec<f64> + Send + Sync + 'static,
     {
         self.callback_f64 = Some(Box::new(callback));
     }
