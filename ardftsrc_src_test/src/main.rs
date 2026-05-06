@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use ardftsrc::{Ardftsrc, Config, TaperType};
+use ardftsrc::{Config, InterleavedResampler, TaperType};
 use clap::{ArgGroup, Parser, ValueEnum};
 use hydrogen_src::{
     FloatVariant, HydrogenError, HydrogenSrc, LocalHarness, ResampleRequestF32, ResampleRequestF64,
@@ -161,11 +161,12 @@ fn run_ardftsrc_f32(
         taper_type,
     };
 
-    let mut resampler =
-        Ardftsrc::<f32>::new(config).expect("failed to create ardftsrc f32 resampler");
+    let mut resampler = InterleavedResampler::<f32>::new(config)
+        .expect("failed to create ardftsrc f32 resampler");
     resampler
         .process_all(&request.samples)
         .expect("failed during ardftsrc f32 processing")
+        .interleave()
 }
 
 fn run_ardftsrc_f64(
@@ -183,9 +184,10 @@ fn run_ardftsrc_f64(
         taper_type,
     };
 
-    let mut resampler =
-        Ardftsrc::<f64>::new(config).expect("failed to create ardftsrc f64 resampler");
+    let mut resampler = InterleavedResampler::<f64>::new(config)
+        .expect("failed to create ardftsrc f64 resampler");
     resampler
         .process_all(&request.samples)
         .expect("failed during ardftsrc f64 processing")
+        .interleave()
 }
