@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use ardftsrc::{Config, InterleavedResampler, TaperType};
+use ardftsrc::{Config, PlanarResampler, TaperType};
 use clap::{ArgGroup, Parser, ValueEnum};
 use hydrogen_src::{
     FloatVariant, HydrogenError, HydrogenSrc, LocalHarness, ResampleRequestF32, ResampleRequestF64,
@@ -161,12 +161,15 @@ fn run_ardftsrc_f32(
         taper_type,
     };
 
-    let mut resampler = InterleavedResampler::<f32>::new(config)
+    let mut resampler = PlanarResampler::<f32>::new(config)
         .expect("failed to create ardftsrc f32 resampler");
-    resampler
-        .process_all(&request.samples)
-        .expect("failed during ardftsrc f32 processing")
-        .interleave()
+
+    let input_samples = vec![request.samples.as_slice()];
+    let mut output_samples = resampler
+        .process_all(&input_samples)
+        .expect("failed during ardftsrc f32 processing");
+
+    output_samples.pop_channel().expect("failed to get output samples")
 }
 
 fn run_ardftsrc_f64(
@@ -184,10 +187,13 @@ fn run_ardftsrc_f64(
         taper_type,
     };
 
-    let mut resampler = InterleavedResampler::<f64>::new(config)
+    let mut resampler = PlanarResampler::<f64>::new(config)
         .expect("failed to create ardftsrc f64 resampler");
-    resampler
-        .process_all(&request.samples)
-        .expect("failed during ardftsrc f64 processing")
-        .interleave()
+
+    let input_samples = vec![request.samples.as_slice()];
+    let mut output_samples = resampler
+        .process_all(&input_samples)
+        .expect("failed during ardftsrc f64 processing");
+
+    output_samples.pop_channel().expect("failed to get output samples")
 }
