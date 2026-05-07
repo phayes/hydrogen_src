@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
-use ardftsrc::{Config, PlanarResampler, TaperType};
+use ardftsrc::{
+    Config, PlanarResampler, TaperType, PRESET_EXTREME, PRESET_FAST, PRESET_GOOD, PRESET_HIGH,
+};
 use clap::{ArgGroup, Parser, ValueEnum};
 use hydrogen_src::{
     FloatVariant, HydrogenError, HydrogenSrc, LocalHarness, ResampleRequestF32, ResampleRequestF64,
@@ -16,6 +18,7 @@ struct Args {
     // General options
     #[arg(long)]
     workdir: PathBuf,
+    /// Use f32 internal processing (default is f64).
     #[arg(long)]
     f32: bool,
     #[arg(long)]
@@ -28,14 +31,51 @@ struct Args {
     score_only: bool,
 
     // Ardftsrc options
-    #[arg(long, default_value_t = 2048)]
-    quality: usize,
-    #[arg(long, default_value_t = 0.95)]
-    bandwidth: f32,
+    /// Baseline quality/bandwidth from an ardftsrc preset; optional `--quality` / `--bandwidth` override preset values.
+    #[arg(long, value_enum)]
+    preset: Option<PresetArg>,
+    /// Resampler quality (tap count / FFT size parameter). With `--preset`, defaults to the preset; otherwise defaults to 2048.
+    #[arg(long)]
+    quality: Option<usize>,
+    /// Normalized low-pass bandwidth in [0.0, 1.0]. With `--preset`, defaults to the preset; otherwise defaults to 0.95.
+    #[arg(long)]
+    bandwidth: Option<f32>,
     #[arg(long, value_enum, default_value_t = CliTaperType::Cosine)]
     taper_type: CliTaperType,
     #[arg(long)]
     alpha: Option<f32>,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum PresetArg {
+    /// Low-latency (quality = 512, bandwidth ≈ 0.8323).
+    Fast,
+    /// Balanced (quality = 1878, bandwidth ≈ 0.911).
+    Good,
+    /// High quality (quality = 73622, bandwidth ≈ 0.987).
+    High,
+    /// Maximum quality (quality = 524514, bandwidth ≈ 0.995).
+    Extreme,
+}
+
+impl PresetArg {
+    fn slug(self) -> &'static str {
+        match self {
+            Self::Fast => "fast",
+            Self::Good => "good",
+            Self::High => "high",
+            Self::Extreme => "extreme",
+        }
+    }
+
+    fn base_config(self) -> Config {
+        match self {
+            Self::Fast => PRESET_FAST,
+            Self::Good => PRESET_GOOD,
+            Self::High => PRESET_HIGH,
+            Self::Extreme => PRESET_EXTREME,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -76,29 +116,51 @@ fn build_taper_type(taper_type: CliTaperType, alpha: Option<f32>) -> TaperType {
 fn main() -> Result<(), HydrogenError> {
     let cli = Args::parse();
 
-    let float_variant = if cli.f64 {
-        FloatVariant::F64
-    } else {
+    let float_variant = if cli.f32 {
         FloatVariant::F32
+    } else {
+        FloatVariant::F64
     };
 
-    if cli.quality == 0 {
+    let (quality, bandwidth) = match cli.preset {
+        Some(preset) => {
+            let base = preset.base_config();
+            (
+                cli.quality.unwrap_or(base.quality),
+                cli.bandwidth.unwrap_or(base.bandwidth),
+            )
+        }
+        None => (
+            cli.quality.unwrap_or(2048),
+            cli.bandwidth.unwrap_or(0.95),
+        ),
+    };
+
+    if quality == 0 {
         eprintln!("--quality must be > 0");
         std::process::exit(2);
     }
 
-    if !(0.0..=1.0).contains(&cli.bandwidth) || !cli.bandwidth.is_finite() {
+    if !(0.0..=1.0).contains(&bandwidth) || !bandwidth.is_finite() {
         eprintln!("--bandwidth must be finite and in 0.0..=1.0");
         std::process::exit(2);
     }
 
-    let quality = cli.quality;
-    let bandwidth = cli.bandwidth;
     let taper_type = build_taper_type(cli.taper_type, cli.alpha);
     let taper_slug = cli.taper_type.slug();
     let alpha_slug = match taper_type {
         TaperType::Cosine(alpha) => format!("-a{alpha:.2}"),
         TaperType::Planck => String::new(),
+    };
+
+    let output_label = match cli.preset {
+        Some(preset) => format!(
+            "output-ardftsrc-preset-{}-q{quality}-bw{bandwidth:.4}-t{taper_slug}{alpha_slug}",
+            preset.slug()
+        ),
+        None => format!(
+            "output-ardftsrc-q{quality}-bw{bandwidth:.4}-t{taper_slug}{alpha_slug}"
+        ),
     };
 
     if cli.local {
@@ -129,11 +191,7 @@ fn main() -> Result<(), HydrogenError> {
         return Ok(());
     }
 
-    let mut hydrogen = HydrogenSrc::new(
-        cli.workdir,
-        float_variant,
-        &format!("output-ardftsrc-q{quality}-bw{bandwidth:.4}-t{taper_slug}{alpha_slug}"),
-    );
+    let mut hydrogen = HydrogenSrc::new(cli.workdir, float_variant, &output_label);
 
     hydrogen.set_callback_f32(move |request: ResampleRequestF32| -> Vec<f32> {
         run_ardftsrc_f32(request, quality, bandwidth, taper_type)
