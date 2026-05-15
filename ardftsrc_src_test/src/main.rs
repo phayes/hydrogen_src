@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use ardftsrc::{
-    Config, PlanarResampler, TaperType, PRESET_EXTREME, PRESET_FAST, PRESET_GOOD, PRESET_HIGH,
+    Config, PRESET_EXTREME, PRESET_FAST, PRESET_GOOD, PRESET_HIGH, PlanarResampler, TaperType,
 };
 use clap::{ArgGroup, Parser, ValueEnum};
 use hydrogen_src::{
@@ -44,6 +44,12 @@ struct Args {
     taper_type: CliTaperType,
     #[arg(long)]
     alpha: Option<f32>,
+    /// Frequency-dependent phase rotation in [-1.0, 1.0]. Defaults to 0.0.
+    #[arg(long)]
+    phase: Option<f32>,
+    /// Phase rotation intensity in [0.0, 100.0]. Defaults to 40.0.
+    #[arg(long)]
+    phase_intensity: Option<f32>,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -122,17 +128,22 @@ fn main() -> Result<(), HydrogenError> {
         FloatVariant::F64
     };
 
-    let (quality, bandwidth) = match cli.preset {
+    let (quality, bandwidth, phase, phase_intensity) = match cli.preset {
         Some(preset) => {
             let base = preset.base_config();
             (
                 cli.quality.unwrap_or(base.quality),
                 cli.bandwidth.unwrap_or(base.bandwidth),
+                cli.phase.unwrap_or(base.phase),
+                cli.phase_intensity.unwrap_or(base.phase_intensity),
             )
         }
         None => (
             cli.quality.unwrap_or(2048),
             cli.bandwidth.unwrap_or(0.95),
+            cli.phase.unwrap_or(Config::DEFAULT.phase),
+            cli.phase_intensity
+                .unwrap_or(Config::DEFAULT.phase_intensity),
         ),
     };
 
@@ -146,20 +157,31 @@ fn main() -> Result<(), HydrogenError> {
         std::process::exit(2);
     }
 
+    if !(-1.0..=1.0).contains(&phase) || !phase.is_finite() {
+        eprintln!("--phase must be finite and in -1.0..=1.0");
+        std::process::exit(2);
+    }
+
+    if !(0.0..=100.0).contains(&phase_intensity) || !phase_intensity.is_finite() {
+        eprintln!("--phase-intensity must be finite and in 0.0..=100.0");
+        std::process::exit(2);
+    }
+
     let taper_type = build_taper_type(cli.taper_type, cli.alpha);
     let taper_slug = cli.taper_type.slug();
     let alpha_slug = match taper_type {
         TaperType::Cosine(alpha) => format!("-a{alpha:.2}"),
         TaperType::Planck => String::new(),
     };
+    let phase_slug = format!("-p{phase:.3}-pi{phase_intensity:.1}");
 
     let output_label = match cli.preset {
         Some(preset) => format!(
-            "output-ardftsrc-preset-{}-q{quality}-bw{bandwidth:.4}-t{taper_slug}{alpha_slug}",
+            "output-ardftsrc-preset-{}-q{quality}-bw{bandwidth:.4}-t{taper_slug}{alpha_slug}{phase_slug}",
             preset.slug()
         ),
         None => format!(
-            "output-ardftsrc-q{quality}-bw{bandwidth:.4}-t{taper_slug}{alpha_slug}"
+            "output-ardftsrc-q{quality}-bw{bandwidth:.4}-t{taper_slug}{alpha_slug}{phase_slug}"
         ),
     };
 
@@ -168,12 +190,26 @@ fn main() -> Result<(), HydrogenError> {
         match float_variant {
             FloatVariant::F32 => {
                 local.set_callback_f32(move |request: ResampleRequestF32| -> Vec<f32> {
-                    run_ardftsrc_f32(request, quality, bandwidth, taper_type)
+                    run_ardftsrc_f32(
+                        request,
+                        quality,
+                        bandwidth,
+                        taper_type,
+                        phase,
+                        phase_intensity,
+                    )
                 });
             }
             FloatVariant::F64 => {
                 local.set_callback_f64(move |request: ResampleRequestF64| -> Vec<f64> {
-                    run_ardftsrc_f64(request, quality, bandwidth, taper_type)
+                    run_ardftsrc_f64(
+                        request,
+                        quality,
+                        bandwidth,
+                        taper_type,
+                        phase,
+                        phase_intensity,
+                    )
                 });
             }
         }
@@ -194,10 +230,24 @@ fn main() -> Result<(), HydrogenError> {
     let mut hydrogen = HydrogenSrc::new(cli.workdir, float_variant, &output_label);
 
     hydrogen.set_callback_f32(move |request: ResampleRequestF32| -> Vec<f32> {
-        run_ardftsrc_f32(request, quality, bandwidth, taper_type)
+        run_ardftsrc_f32(
+            request,
+            quality,
+            bandwidth,
+            taper_type,
+            phase,
+            phase_intensity,
+        )
     });
     hydrogen.set_callback_f64(move |request: ResampleRequestF64| -> Vec<f64> {
-        run_ardftsrc_f64(request, quality, bandwidth, taper_type)
+        run_ardftsrc_f64(
+            request,
+            quality,
+            bandwidth,
+            taper_type,
+            phase,
+            phase_intensity,
+        )
     });
 
     let _ = hydrogen.run()?;
@@ -209,6 +259,8 @@ fn run_ardftsrc_f32(
     quality: usize,
     bandwidth: f32,
     taper_type: TaperType,
+    phase: f32,
+    phase_intensity: f32,
 ) -> Vec<f32> {
     let config = Config {
         input_sample_rate: request.sample_rate,
@@ -217,17 +269,22 @@ fn run_ardftsrc_f32(
         quality,
         bandwidth,
         taper_type,
+        phase,
+        phase_intensity,
+        ..Config::default()
     };
 
-    let mut resampler = PlanarResampler::<f32>::new(config)
-        .expect("failed to create ardftsrc f32 resampler");
+    let mut resampler =
+        PlanarResampler::<f32>::new(config).expect("failed to create ardftsrc f32 resampler");
 
     let input_samples = vec![request.samples.as_slice()];
     let mut output_samples = resampler
         .process_all(&input_samples)
         .expect("failed during ardftsrc f32 processing");
 
-    output_samples.pop_channel().expect("failed to get output samples")
+    output_samples
+        .pop_channel()
+        .expect("failed to get output samples")
 }
 
 fn run_ardftsrc_f64(
@@ -235,6 +292,8 @@ fn run_ardftsrc_f64(
     quality: usize,
     bandwidth: f32,
     taper_type: TaperType,
+    phase: f32,
+    phase_intensity: f32,
 ) -> Vec<f64> {
     let config = Config {
         input_sample_rate: request.sample_rate,
@@ -243,15 +302,20 @@ fn run_ardftsrc_f64(
         quality,
         bandwidth,
         taper_type,
+        phase,
+        phase_intensity,
+        ..Config::default()
     };
 
-    let mut resampler = PlanarResampler::<f64>::new(config)
-        .expect("failed to create ardftsrc f64 resampler");
+    let mut resampler =
+        PlanarResampler::<f64>::new(config).expect("failed to create ardftsrc f64 resampler");
 
     let input_samples = vec![request.samples.as_slice()];
     let mut output_samples = resampler
         .process_all(&input_samples)
         .expect("failed during ardftsrc f64 processing");
 
-    output_samples.pop_channel().expect("failed to get output samples")
+    output_samples
+        .pop_channel()
+        .expect("failed to get output samples")
 }
