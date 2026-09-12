@@ -42,14 +42,26 @@ struct Args {
     bandwidth: Option<f32>,
     #[arg(long, value_enum, default_value_t = CliTaperType::Cosine)]
     taper_type: CliTaperType,
+    /// Taper alpha parameter. Used by `bessel`, `cosine`, and `beta_cdf`.
     #[arg(long)]
     alpha: Option<f32>,
+    /// Taper beta parameter. Used by `beta_cdf`.
+    #[arg(long)]
+    beta: Option<f32>,
     /// Frequency-dependent phase rotation in [-1.0, 1.0]. Defaults to 0.0.
     #[arg(long)]
     phase: Option<f32>,
     /// Phase rotation intensity in [0.0, 100.0]. Defaults to 40.0.
     #[arg(long)]
     phase_intensity: Option<f32>,
+    /// Enable 2:1 pre-decimation stages ahead of the FFT resampler for large downsampling ratios.
+    /// With `--preset`, defaults to the preset; otherwise defaults to false.
+    #[arg(long)]
+    decimate: Option<bool>,
+    /// Use the double-double-precision FFT backend. Much slower; intended for extreme quality.
+    /// Only compatible with f64 processing.
+    #[arg(long = "dd-fft", alias = "dd_fft")]
+    dd_fft: bool,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -87,34 +99,72 @@ impl PresetArg {
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum CliTaperType {
     Planck,
+    Bessel,
     Cosine,
+    #[value(name = "beta_cdf", alias = "beta-cdf")]
+    BetaCdf,
 }
 
 impl CliTaperType {
     fn slug(self) -> &'static str {
         match self {
             Self::Planck => "planck",
+            Self::Bessel => "bessel",
             Self::Cosine => "cosine",
+            Self::BetaCdf => "beta_cdf",
         }
     }
 }
 
-fn build_taper_type(taper_type: CliTaperType, alpha: Option<f32>) -> TaperType {
+fn build_taper_type(taper_type: CliTaperType, alpha: Option<f32>, beta: Option<f32>) -> TaperType {
     match taper_type {
         CliTaperType::Planck => {
-            if alpha.is_some() {
-                eprintln!("--alpha can only be used with --taper-type=cosine");
+            if alpha.is_some() || beta.is_some() {
+                eprintln!(
+                    "--alpha and --beta can only be used with --taper-type=bessel, --taper-type=cosine, or --taper-type=beta_cdf"
+                );
                 std::process::exit(2);
             }
             TaperType::Planck
         }
+        CliTaperType::Bessel => {
+            if beta.is_some() {
+                eprintln!("--beta can only be used with --taper-type=beta_cdf");
+                std::process::exit(2);
+            }
+            let alpha = alpha.unwrap_or(6.0);
+            if alpha <= 0.0 || !alpha.is_finite() {
+                eprintln!("--alpha must be finite and > 0 when --taper-type=bessel");
+                std::process::exit(2);
+            }
+            TaperType::Bessel(alpha)
+        }
         CliTaperType::Cosine => {
+            if beta.is_some() {
+                eprintln!("--beta can only be used with --taper-type=beta_cdf");
+                std::process::exit(2);
+            }
             let alpha = alpha.unwrap_or(3.4375);
             if alpha <= 0.0 || !alpha.is_finite() {
                 eprintln!("--alpha must be finite and > 0 when --taper-type=cosine");
                 std::process::exit(2);
             }
             TaperType::Cosine(alpha)
+        }
+        CliTaperType::BetaCdf => {
+            let alpha = alpha.unwrap_or(24.0);
+            if alpha <= 0.0 || !alpha.is_finite() {
+                eprintln!("--alpha must be finite and > 0 when --taper-type=beta_cdf");
+                std::process::exit(2);
+            }
+
+            let beta = beta.unwrap_or(24.0);
+            if beta <= 0.0 || !beta.is_finite() {
+                eprintln!("--beta must be finite and > 0 when --taper-type=beta_cdf");
+                std::process::exit(2);
+            }
+
+            TaperType::BetaCdf { alpha, beta }
         }
     }
 }
@@ -128,7 +178,7 @@ fn main() -> Result<(), HydrogenError> {
         FloatVariant::F64
     };
 
-    let (quality, bandwidth, phase, phase_intensity) = match cli.preset {
+    let (quality, bandwidth, phase, phase_intensity, decimate) = match cli.preset {
         Some(preset) => {
             let base = preset.base_config();
             (
@@ -136,6 +186,7 @@ fn main() -> Result<(), HydrogenError> {
                 cli.bandwidth.unwrap_or(base.bandwidth),
                 cli.phase.unwrap_or(base.phase),
                 cli.phase_intensity.unwrap_or(base.phase_intensity),
+                cli.decimate.unwrap_or(base.decimate),
             )
         }
         None => (
@@ -144,6 +195,7 @@ fn main() -> Result<(), HydrogenError> {
             cli.phase.unwrap_or(Config::DEFAULT.phase),
             cli.phase_intensity
                 .unwrap_or(Config::DEFAULT.phase_intensity),
+            cli.decimate.unwrap_or(Config::DEFAULT.decimate),
         ),
     };
 
@@ -167,21 +219,31 @@ fn main() -> Result<(), HydrogenError> {
         std::process::exit(2);
     }
 
-    let taper_type = build_taper_type(cli.taper_type, cli.alpha);
+    let dd_fft = cli.dd_fft;
+    if dd_fft && matches!(float_variant, FloatVariant::F32) {
+        eprintln!("--dd-fft is not compatible with --f32; use --f64 instead");
+        std::process::exit(2);
+    }
+
+    let taper_type = build_taper_type(cli.taper_type, cli.alpha, cli.beta);
     let taper_slug = cli.taper_type.slug();
-    let alpha_slug = match taper_type {
+    let taper_param_slug = match taper_type {
+        TaperType::Bessel(alpha) => format!("-a{alpha:.2}"),
         TaperType::Cosine(alpha) => format!("-a{alpha:.2}"),
+        TaperType::BetaCdf { alpha, beta } => format!("-a{alpha:.2}-b{beta:.2}"),
         TaperType::Planck => String::new(),
     };
     let phase_slug = format!("-p{phase:.3}-pi{phase_intensity:.1}");
+    let decimate_slug = if decimate { "-dec1" } else { "-dec0" };
+    let dd_fft_slug = if dd_fft { "-dd1" } else { "-dd0" };
 
     let output_label = match cli.preset {
         Some(preset) => format!(
-            "output-ardftsrc-preset-{}-q{quality}-bw{bandwidth:.4}-t{taper_slug}{alpha_slug}{phase_slug}",
+            "output-ardftsrc-preset-{}-q{quality}-bw{bandwidth:.4}-t{taper_slug}{taper_param_slug}{phase_slug}{decimate_slug}{dd_fft_slug}",
             preset.slug()
         ),
         None => format!(
-            "output-ardftsrc-q{quality}-bw{bandwidth:.4}-t{taper_slug}{alpha_slug}{phase_slug}"
+            "output-ardftsrc-q{quality}-bw{bandwidth:.4}-t{taper_slug}{taper_param_slug}{phase_slug}{decimate_slug}{dd_fft_slug}"
         ),
     };
 
@@ -197,6 +259,7 @@ fn main() -> Result<(), HydrogenError> {
                         taper_type,
                         phase,
                         phase_intensity,
+                        decimate,
                     )
                 });
             }
@@ -209,6 +272,8 @@ fn main() -> Result<(), HydrogenError> {
                         taper_type,
                         phase,
                         phase_intensity,
+                        decimate,
+                        dd_fft,
                     )
                 });
             }
@@ -237,6 +302,7 @@ fn main() -> Result<(), HydrogenError> {
             taper_type,
             phase,
             phase_intensity,
+            decimate,
         )
     });
     hydrogen.set_callback_f64(move |request: ResampleRequestF64| -> Vec<f64> {
@@ -247,6 +313,8 @@ fn main() -> Result<(), HydrogenError> {
             taper_type,
             phase,
             phase_intensity,
+            decimate,
+            dd_fft,
         )
     });
 
@@ -261,6 +329,7 @@ fn run_ardftsrc_f32(
     taper_type: TaperType,
     phase: f32,
     phase_intensity: f32,
+    decimate: bool,
 ) -> Vec<f32> {
     let config = Config {
         input_sample_rate: request.sample_rate,
@@ -271,6 +340,7 @@ fn run_ardftsrc_f32(
         taper_type,
         phase,
         phase_intensity,
+        decimate,
         ..Config::default()
     };
 
@@ -294,6 +364,8 @@ fn run_ardftsrc_f64(
     taper_type: TaperType,
     phase: f32,
     phase_intensity: f32,
+    decimate: bool,
+    dd_fft: bool,
 ) -> Vec<f64> {
     let config = Config {
         input_sample_rate: request.sample_rate,
@@ -304,6 +376,8 @@ fn run_ardftsrc_f64(
         taper_type,
         phase,
         phase_intensity,
+        decimate,
+        dd_fft,
         ..Config::default()
     };
 
