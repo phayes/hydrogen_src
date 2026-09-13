@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 
 use ardftsrc::{
-    Config, PRESET_EXTREME, PRESET_FAST, PRESET_GOOD, PRESET_HIGH, PlanarResampler, TaperType,
+    AliasFloor, Config, PRESET_EXTREME, PRESET_FAST, PRESET_GOOD, PRESET_HIGH, PlanarResampler,
+    TaperType,
 };
 use clap::{ArgGroup, Parser, ValueEnum};
 use hydrogen_src::{
@@ -53,6 +54,18 @@ struct Args {
     /// Phase rotation intensity in [0.0, 100.0]. Defaults to 40.0.
     #[arg(long)]
     phase_intensity: Option<f32>,
+    /// Permit aliasing/imaging inside the low-pass transition band (similar to SoX `rate -a`).
+    /// Widens the transition to reduce ringing at the cost of alias rejection; the passband is
+    /// unchanged. Equivalent to `--alias-floor-db -3`.
+    #[arg(short = 'a', long = "allow-aliasing", conflicts_with_all = ["alias_floor", "alias_floor_db"])]
+    allow_aliasing: bool,
+    /// Lowest frequency that may receive folded/imaged energy, as a fraction of the lower Nyquist
+    /// in [bandwidth, 1.0]. 1.0 (default) disables aliasing.
+    #[arg(long = "alias-floor", conflicts_with = "alias_floor_db")]
+    alias_floor: Option<f32>,
+    /// Fold/image only down to the frequency where the filter response is this many dB (< 0).
+    #[arg(long = "alias-floor-db", allow_negative_numbers = true)]
+    alias_floor_db: Option<f32>,
     /// Enable 2:1 pre-decimation stages ahead of the FFT resampler for large downsampling ratios.
     /// With `--preset`, defaults to the preset; otherwise defaults to false.
     #[arg(long)]
@@ -112,6 +125,49 @@ impl CliTaperType {
             Self::Cosine => "cosine",
             Self::BetaCdf => "beta_cdf",
         }
+    }
+}
+
+const DEFAULT_ALLOW_ALIASING_DB: f32 = -3.0;
+
+fn build_alias_floor(
+    allow_aliasing: bool,
+    alias_floor: Option<f32>,
+    alias_floor_db: Option<f32>,
+    default: AliasFloor,
+) -> AliasFloor {
+    if allow_aliasing {
+        AliasFloor::Decibels(DEFAULT_ALLOW_ALIASING_DB)
+    } else if let Some(fraction) = alias_floor {
+        AliasFloor::Fraction(fraction)
+    } else if let Some(db) = alias_floor_db {
+        AliasFloor::Decibels(db)
+    } else {
+        default
+    }
+}
+
+fn validate_alias_floor(alias_floor: AliasFloor, bandwidth: f32) {
+    match alias_floor {
+        AliasFloor::Fraction(fraction) => {
+            if !fraction.is_finite() || fraction < bandwidth || fraction > 1.0 {
+                eprintln!("--alias-floor must be finite and in [bandwidth, 1.0]");
+                std::process::exit(2);
+            }
+        }
+        AliasFloor::Decibels(db) => {
+            if !db.is_finite() || db >= 0.0 {
+                eprintln!("--alias-floor-db must be finite and < 0.0");
+                std::process::exit(2);
+            }
+        }
+    }
+}
+
+fn alias_floor_slug(alias_floor: AliasFloor) -> String {
+    match alias_floor {
+        AliasFloor::Fraction(fraction) => format!("-af{fraction:.4}"),
+        AliasFloor::Decibels(db) => format!("-afdb{db:.1}"),
     }
 }
 
@@ -177,7 +233,7 @@ fn main() -> Result<(), HydrogenError> {
         FloatVariant::F64
     };
 
-    let (quality, bandwidth, phase, phase_intensity, decimate) = match cli.preset {
+    let (quality, bandwidth, phase, phase_intensity, alias_floor, decimate) = match cli.preset {
         Some(preset) => {
             let base = preset.base_config();
             (
@@ -185,6 +241,12 @@ fn main() -> Result<(), HydrogenError> {
                 cli.bandwidth.unwrap_or(base.bandwidth),
                 cli.phase.unwrap_or(base.phase),
                 cli.phase_intensity.unwrap_or(base.phase_intensity),
+                build_alias_floor(
+                    cli.allow_aliasing,
+                    cli.alias_floor,
+                    cli.alias_floor_db,
+                    base.alias_floor,
+                ),
                 cli.decimate.unwrap_or(base.decimate),
             )
         }
@@ -194,6 +256,12 @@ fn main() -> Result<(), HydrogenError> {
             cli.phase.unwrap_or(Config::DEFAULT.phase),
             cli.phase_intensity
                 .unwrap_or(Config::DEFAULT.phase_intensity),
+            build_alias_floor(
+                cli.allow_aliasing,
+                cli.alias_floor,
+                cli.alias_floor_db,
+                Config::DEFAULT.alias_floor,
+            ),
             cli.decimate.unwrap_or(Config::DEFAULT.decimate),
         ),
     };
@@ -218,6 +286,8 @@ fn main() -> Result<(), HydrogenError> {
         std::process::exit(2);
     }
 
+    validate_alias_floor(alias_floor, bandwidth);
+
     let dd_fft = cli.dd_fft;
     if dd_fft && matches!(float_variant, FloatVariant::F32) {
         eprintln!("--dd-fft is not compatible with --f32; use --f64 instead");
@@ -233,16 +303,17 @@ fn main() -> Result<(), HydrogenError> {
         TaperType::Planck => String::new(),
     };
     let phase_slug = format!("-p{phase:.3}-pi{phase_intensity:.1}");
+    let alias_floor_slug = alias_floor_slug(alias_floor);
     let decimate_slug = if decimate { "-dec1" } else { "-dec0" };
     let dd_fft_slug = if dd_fft { "-dd1" } else { "-dd0" };
 
     let output_label = match cli.preset {
         Some(preset) => format!(
-            "output-ardftsrc-preset-{}-q{quality}-bw{bandwidth:.4}-t{taper_slug}{taper_param_slug}{phase_slug}{decimate_slug}{dd_fft_slug}",
+            "output-ardftsrc-preset-{}-q{quality}-bw{bandwidth:.4}-t{taper_slug}{taper_param_slug}{phase_slug}{alias_floor_slug}{decimate_slug}{dd_fft_slug}",
             preset.slug()
         ),
         None => format!(
-            "output-ardftsrc-q{quality}-bw{bandwidth:.4}-t{taper_slug}{taper_param_slug}{phase_slug}{decimate_slug}{dd_fft_slug}"
+            "output-ardftsrc-q{quality}-bw{bandwidth:.4}-t{taper_slug}{taper_param_slug}{phase_slug}{alias_floor_slug}{decimate_slug}{dd_fft_slug}"
         ),
     };
 
@@ -263,6 +334,7 @@ fn main() -> Result<(), HydrogenError> {
                         taper_type,
                         phase,
                         phase_intensity,
+                        alias_floor,
                         decimate,
                     )
                 });
@@ -276,6 +348,7 @@ fn main() -> Result<(), HydrogenError> {
                         taper_type,
                         phase,
                         phase_intensity,
+                        alias_floor,
                         decimate,
                         dd_fft,
                     )
@@ -306,6 +379,7 @@ fn main() -> Result<(), HydrogenError> {
             taper_type,
             phase,
             phase_intensity,
+            alias_floor,
             decimate,
         )
     });
@@ -317,6 +391,7 @@ fn main() -> Result<(), HydrogenError> {
             taper_type,
             phase,
             phase_intensity,
+            alias_floor,
             decimate,
             dd_fft,
         )
@@ -333,6 +408,7 @@ fn run_ardftsrc_f32(
     taper_type: TaperType,
     phase: f32,
     phase_intensity: f32,
+    alias_floor: AliasFloor,
     decimate: bool,
 ) -> Vec<f32> {
     let config = Config {
@@ -344,6 +420,7 @@ fn run_ardftsrc_f32(
         taper_type,
         phase,
         phase_intensity,
+        alias_floor,
         decimate,
         ..Config::default()
     };
@@ -368,6 +445,7 @@ fn run_ardftsrc_f64(
     taper_type: TaperType,
     phase: f32,
     phase_intensity: f32,
+    alias_floor: AliasFloor,
     decimate: bool,
     dd_fft: bool,
 ) -> Vec<f64> {
@@ -380,6 +458,7 @@ fn run_ardftsrc_f64(
         taper_type,
         phase,
         phase_intensity,
+        alias_floor,
         decimate,
         dd_fft,
         ..Config::default()

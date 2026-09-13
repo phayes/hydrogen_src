@@ -78,8 +78,7 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 [[package]]
 name = "ardftsrc"
 version = "0.0.17"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0499e9d4f140239429578e9875079356a1f11d5656937a258a78807483b81b50"
+source = "git+https://github.com/phayes/ardftsrc-rs#6ad62696f9f4cae9a37dcd6f9e0bb884ca758a5c"
 dependencies = [
  "num-complex",
  "num-integer",

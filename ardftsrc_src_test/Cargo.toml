@@ -5,6 +5,6 @@ edition = "2024"
 
 [dependencies]
 clap = { version = "4.6.1", features = ["derive"] }
-ardftsrc = { version = "0.0.17", default-features = false, features=["bessel", "dd_fft"] }
+ardftsrc = { git = "https://github.com/phayes/ardftsrc-rs", default-features = false, features=["bessel", "dd_fft"] }
 hydrogen_src = { version = "0.1.0", path = "../hydrogen_src", default-features = false }
 serde_json = "1"
