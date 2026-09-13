@@ -14,6 +14,7 @@ use zip::write::SimpleFileOptions;
 pub mod local;
 pub use local::LocalHarness;
 pub use local::LocalTestResults;
+pub use local::default_workspace_dir;
 
 const TARGET_OUTPUT_SAMPLE_RATE: usize = 44_100;
 
@@ -69,10 +70,8 @@ pub struct ResampleRequestF64 {
     pub target_sample_rate: usize,
 }
 
-pub type ResamplerCallbackF32 =
-    dyn Fn(ResampleRequestF32) -> Vec<f32> + Send + Sync;
-pub type ResamplerCallbackF64 =
-    dyn Fn(ResampleRequestF64) -> Vec<f64> + Send + Sync;
+pub type ResamplerCallbackF32 = dyn Fn(ResampleRequestF32) -> Vec<f32> + Send + Sync;
+pub type ResamplerCallbackF64 = dyn Fn(ResampleRequestF64) -> Vec<f64> + Send + Sync;
 
 pub struct HydrogenSrc {
     work_dir: PathBuf,
@@ -343,7 +342,7 @@ impl HydrogenSrc {
     }
 }
 
-pub(crate) fn write_f32_with_wav_encoding (
+pub(crate) fn write_f32_with_wav_encoding(
     output_path: &Path,
     output_samples: &[f32],
     output_sample_rate: i32,
@@ -364,7 +363,12 @@ pub(crate) fn write_f32_with_wav_encoding (
             write(output_path, &converted, output_sample_rate, output_channels)?;
         }
         WavType::Float32 | WavType::EFloat32 => {
-            write(output_path, output_samples, output_sample_rate, output_channels)?;
+            write(
+                output_path,
+                output_samples,
+                output_sample_rate,
+                output_channels,
+            )?;
         }
         WavType::Float64 | WavType::EFloat64 => {
             let converted: Samples<f64> = Samples::from(output_samples).convert();
@@ -399,7 +403,12 @@ pub(crate) fn write_f64_with_wav_encoding(
             write(output_path, &converted, output_sample_rate, output_channels)?;
         }
         WavType::Float64 | WavType::EFloat64 => {
-            write(output_path, output_samples, output_sample_rate, output_channels)?;
+            write(
+                output_path,
+                output_samples,
+                output_sample_rate,
+                output_channels,
+            )?;
         }
     }
     Ok(())
@@ -457,6 +466,8 @@ pub enum HydrogenError {
     MissingOctavePackages(Vec<String>),
     #[error("octave command failed during {context}: {stderr}")]
     OctaveCommandFailed { context: String, stderr: String },
+    #[error("could not determine a cache directory for local tests")]
+    MissingCacheDirectory,
     #[error("invalid script location: '{0}'")]
     InvalidScriptLocation(PathBuf),
     #[error("missing generated sample files in '{sample_dir}': {missing_files:?}")]

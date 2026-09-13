@@ -1,11 +1,14 @@
 use std::ffi::OsStr;
 use std::fmt;
-use std::fs::{self, File};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use directories::ProjectDirs;
+use include_dir::{Dir, DirEntry, include_dir};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use wavers::Wav;
 
 use crate::{
@@ -13,15 +16,21 @@ use crate::{
     ResamplerCallbackF64, list_wavs, write_f32_with_wav_encoding, write_f64_with_wav_encoding,
 };
 
+static LOCAL_TEST_ASSETS: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/local_test");
+
 const TARGET_OUTPUT_SAMPLE_RATE: usize = 44_100;
-const DEFAULT_SAMPLE_SUBDIR: &str = "local_test_generated_samples";
 const DEFAULT_OUTPUT_SUBDIR: &str = "local_test_output";
 const DEFAULT_ANALYSIS_OUTPUT_SUBDIR: &str = "analysis_output";
 const CALCULATED_DELAY_FILENAME: &str = "calculateddelay.txt";
 const REFERENCE_SPECTROGRAM_PNG: &str = "sweep-1-to-44KHz-1to11secHighRES-REF.png";
 const GENERATOR_SUBDIR: &str = "TestSignals96KHzto44KHz";
-const INTERNAL_IMPULSE_REFERENCE_WAV: &str = "impulse-64bitfloat-InternalUse.wav";
-const INTERNAL_IMPULSE_REFERENCE_ZIP: &str = "impulse-64bitfloat-InternalUse.zip";
+const CACHE_APPLICATION: &str = "hydrogen_src";
+const CACHE_ORGANIZATION: &str = "hydrogenaudio";
+const CACHE_QUALIFIER: &str = "org";
+const CACHE_LOCAL_TEST_SUBDIR: &str = "local_test";
+const CACHE_SCRIPTS_SUBDIR: &str = "scripts";
+const CACHE_SAMPLES_SUBDIR: &str = "generated_samples";
+const CACHE_WORKSPACE_SUBDIR: &str = "workspace";
 const GENERATION_SCRIPTS: [&str; 6] = [
     "GEN_aliasing150db.m",
     "GEN_bitdepthtest.m",
@@ -73,11 +82,7 @@ impl fmt::Display for LocalTestResults {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "Average score: {}", self.average_score)?;
         writeln!(f, "Balanced score: {}", self.balanced_score)?;
-        writeln!(
-            f,
-            "Average impulse freq: {} db",
-            self.average_impulse_freq
-        )?;
+        writeln!(f, "Average impulse freq: {} db", self.average_impulse_freq)?;
         writeln!(f, "Delay: {} samples", self.delay_samples)?;
         writeln!(f, "Scores:")?;
         writeln!(f, "- spectrogram: {}", self.spectrogram_score)?;
@@ -209,19 +214,25 @@ impl LocalTestResults {
 
 pub struct LocalHarness {
     workspace: PathBuf,
-    script_dir: PathBuf,
     callback_f32: Option<Box<ResamplerCallbackF32>>,
     callback_f64: Option<Box<ResamplerCallbackF64>>,
 }
 
 impl LocalHarness {
-    pub fn new(workspace: impl Into<PathBuf>, script_dir: impl Into<PathBuf>) -> Self {
-        Self {
-            workspace: workspace.into(),
-            script_dir: script_dir.into(),
+    pub fn new(workspace: Option<impl Into<PathBuf>>) -> Result<Self, HydrogenError> {
+        let workspace = match workspace {
+            Some(path) => absolutize_path(path.into())?,
+            None => default_workspace_dir()?,
+        };
+        Ok(Self {
+            workspace,
             callback_f32: None,
             callback_f64: None,
-        }
+        })
+    }
+
+    pub fn workspace(&self) -> &Path {
+        &self.workspace
     }
 
     pub fn set_callback_f32<F>(&mut self, callback: F)
@@ -291,9 +302,9 @@ impl LocalHarness {
 
         self.prepare_output_dir()?;
         self.prepare_analysis_output_dir()?;
+        self.extract_scripts()?;
         self.check_octave_command()?;
         self.check_octave_packages()?;
-        self.ensure_internal_impulse_reference_wav()?;
         self.ensure_sample_wavs_generated()?;
         Ok(())
     }
@@ -418,27 +429,10 @@ impl LocalHarness {
         Ok(())
     }
 
-    fn ensure_internal_impulse_reference_wav(&self) -> Result<(), HydrogenError> {
-        let generator_dir = self.script_dir()?.join(GENERATOR_SUBDIR);
-        let reference_wav = generator_dir.join(INTERNAL_IMPULSE_REFERENCE_WAV);
-        if reference_wav.is_file() {
-            return Ok(());
-        }
-
-        let reference_zip = generator_dir.join(INTERNAL_IMPULSE_REFERENCE_ZIP);
-        if !reference_zip.is_file() {
-            return Err(HydrogenError::InvalidScriptLocation(reference_zip));
-        }
-
-        let zip_file = File::open(&reference_zip)?;
-        let mut archive = zip::ZipArchive::new(zip_file)?;
-        archive.extract(&generator_dir)?;
-
-        if !reference_wav.is_file() {
-            return Err(HydrogenError::InvalidScriptLocation(reference_wav));
-        }
-
-        Ok(())
+    fn extract_scripts(&self) -> Result<(), HydrogenError> {
+        let dest = script_cache_dir()?;
+        fs::create_dir_all(&dest)?;
+        extract_embedded(&LOCAL_TEST_ASSETS, &dest)
     }
 
     fn run_sample_generation(&self) -> Result<(), HydrogenError> {
@@ -563,20 +557,11 @@ impl LocalHarness {
     }
 
     fn workspace_dir(&self) -> Result<PathBuf, HydrogenError> {
-        if self.workspace.is_absolute() {
-            Ok(self.workspace.clone())
-        } else {
-            Ok(std::env::current_dir()?.join(&self.workspace))
-        }
+        Ok(self.workspace.clone())
     }
 
     fn script_dir(&self) -> Result<PathBuf, HydrogenError> {
-        let script_dir = if self.script_dir.is_absolute() {
-            self.script_dir.clone()
-        } else {
-            std::env::current_dir()?.join(&self.script_dir)
-        };
-
+        let script_dir = script_cache_dir()?;
         if !script_dir.is_dir() {
             return Err(HydrogenError::InvalidScriptLocation(script_dir));
         }
@@ -585,7 +570,7 @@ impl LocalHarness {
     }
 
     fn sample_dir(&self) -> Result<PathBuf, HydrogenError> {
-        Ok(self.workspace_dir()?.join(DEFAULT_SAMPLE_SUBDIR))
+        sample_cache_dir()
     }
 
     fn sample_input_dir(&self, float_variant: FloatVariant) -> Result<PathBuf, HydrogenError> {
@@ -634,6 +619,55 @@ impl LocalHarness {
         }
         Ok(script_paths)
     }
+}
+
+pub fn default_workspace_dir() -> Result<PathBuf, HydrogenError> {
+    Ok(local_test_cache_root()?.join(CACHE_WORKSPACE_SUBDIR))
+}
+
+fn local_test_cache_root() -> Result<PathBuf, HydrogenError> {
+    let dirs = ProjectDirs::from(CACHE_QUALIFIER, CACHE_ORGANIZATION, CACHE_APPLICATION)
+        .ok_or(HydrogenError::MissingCacheDirectory)?;
+    Ok(dirs.cache_dir().to_path_buf())
+}
+
+fn script_cache_dir() -> Result<PathBuf, HydrogenError> {
+    Ok(local_test_cache_root()?
+        .join(CACHE_LOCAL_TEST_SUBDIR)
+        .join(CACHE_SCRIPTS_SUBDIR))
+}
+
+fn sample_cache_dir() -> Result<PathBuf, HydrogenError> {
+    Ok(local_test_cache_root()?
+        .join(CACHE_LOCAL_TEST_SUBDIR)
+        .join(CACHE_SAMPLES_SUBDIR))
+}
+
+fn extract_embedded(dir: &Dir<'_>, dest: &Path) -> Result<(), HydrogenError> {
+    for entry in dir.entries() {
+        match entry {
+            DirEntry::Dir(child) => {
+                fs::create_dir_all(dest.join(child.path()))?;
+                extract_embedded(child, dest)?;
+            }
+            DirEntry::File(file) => {
+                let out = dest.join(file.path());
+                if let Some(parent) = out.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                let contents = file.contents();
+                if out.is_file() && file_sha256(&fs::read(&out)?) == file_sha256(contents) {
+                    continue;
+                }
+                fs::write(out, contents)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn file_sha256(bytes: &[u8]) -> [u8; 32] {
+    Sha256::digest(bytes).into()
 }
 
 fn file_name_from_path(path: &Path) -> Result<PathBuf, HydrogenError> {
@@ -735,4 +769,42 @@ fn nan_f64() -> f64 {
 fn delay_score_from_normalized(value: f64) -> f64 {
     let clamped = value.clamp(0.0, 1.0);
     ((1.0 - clamped) * 100.0).max(0.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn embedded_local_test_contains_required_files() {
+        for script in ANALYSIS_SCRIPTS {
+            assert!(
+                LOCAL_TEST_ASSETS.get_file(script).is_some(),
+                "missing analysis script {script}"
+            );
+        }
+        assert!(
+            LOCAL_TEST_ASSETS.get_file("bit_depth_calc_av.m").is_some(),
+            "missing bit_depth_calc_av.m"
+        );
+        assert!(
+            LOCAL_TEST_ASSETS
+                .get_file(REFERENCE_SPECTROGRAM_PNG)
+                .is_some(),
+            "missing spectrogram reference PNG"
+        );
+
+        let generator_dir = LOCAL_TEST_ASSETS
+            .get_dir(GENERATOR_SUBDIR)
+            .expect("missing generator script directory");
+        for script in GENERATION_SCRIPTS {
+            assert!(
+                generator_dir.get_file(script).is_some()
+                    || LOCAL_TEST_ASSETS
+                        .get_file(format!("{GENERATOR_SUBDIR}/{script}"))
+                        .is_some(),
+                "missing generation script {script}"
+            );
+        }
+    }
 }

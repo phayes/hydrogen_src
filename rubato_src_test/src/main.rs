@@ -3,11 +3,10 @@ use std::path::PathBuf;
 use clap::{ArgGroup, Parser};
 use hydrogen_src::{
     FloatVariant, HydrogenError, HydrogenSrc, LocalHarness, ResampleRequestF32, ResampleRequestF64,
+    default_workspace_dir,
 };
 use rubato_dsp::audioadapter_buffers::direct::InterleavedSlice;
 use rubato_dsp::{Fft, FixedSync, Resampler};
-
-const LOCAL_SCRIPT_DIR: &str = "scripts/TestScripts";
 
 #[derive(Debug, Parser)]
 #[command(
@@ -16,7 +15,7 @@ const LOCAL_SCRIPT_DIR: &str = "scripts/TestScripts";
 struct Args {
     // General options
     #[arg(long)]
-    workdir: PathBuf,
+    workdir: Option<PathBuf>,
     #[arg(long)]
     f32: bool,
     #[arg(long)]
@@ -51,9 +50,14 @@ fn main() -> Result<(), HydrogenError> {
     let chunk_size = cli.chunk_size;
     let sub_chunk = cli.sub_chunk;
 
+    let workdir = match cli.workdir {
+        Some(path) => path,
+        None => default_workspace_dir()?,
+    };
+
     // Local mode
     if cli.local {
-        let mut local = LocalHarness::new(cli.workdir, LOCAL_SCRIPT_DIR);
+        let mut local = LocalHarness::new(Some(workdir))?;
         match float_variant {
             FloatVariant::F32 => {
                 local.set_callback_f32(move |request: ResampleRequestF32| -> Vec<f32> {
@@ -81,7 +85,7 @@ fn main() -> Result<(), HydrogenError> {
     // Remote upload mode (default)
     } else {
         let mut hydrogen = HydrogenSrc::new(
-            cli.workdir,
+            workdir,
             float_variant,
             &format!("output-rubato-{}-{}", chunk_size, sub_chunk),
         );

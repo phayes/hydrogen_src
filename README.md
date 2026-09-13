@@ -7,17 +7,17 @@ See: https://src.hydrogenaudio.org/
 ## Quick start
 
 ```bash
-cargo run -p rubato_src_test -- --workdir=./workspace
+cargo run -p rubato_src_test
 cargo run -p rubato_src_test -- --workdir=./workspace --f64 --chunk-size=1024 --sub-chunk=2
-cargo run -p rubato_src_test -- --workdir=./workspace --local # Run analysis locally, requires "octave" commandline
-cargo run -p rubato_src_test -- --workdir=./workspace --local --json # Run analysis locally and report output in json for automation
+cargo run -p rubato_src_test -- --local # Run analysis locally, requires "octave" commandline
+cargo run -p rubato_src_test -- --local --json # Run analysis locally and report output in json for automation
 ```
 
 ## Params
 
-- `--workdir`: input/output workspace directory
+- `--workdir`: input/output workspace directory. Optional; defaults to a stable cache directory from the `directories` crate
 - `--f64`: use `f64` pipeline (`f32` is default)
-- `--local`: use local anslysis toolbox. Needs "octave" commandline inistalled
+- `--local`: use local analysis toolbox. Needs "octave" commandline installed
 - `--json`: When running local analysis, report results in json format to allow automation
 
 ## Rubato Params
@@ -28,5 +28,5 @@ cargo run -p rubato_src_test -- --workdir=./workspace --local --json # Run analy
 
 1. Add a new workspace binary crate (for example `my_src_test`) and include `hydrogen_src` plus your SRC dependency in `Cargo.toml`.
 2. Copy structure from `rubato_src_test` or `ardftsrc_src_test` and adapt as needed
-4. Run it with `cargo run -p my_src_test -- --workdir=./workspace`.
+4. Run it with `cargo run -p my_src_test` or `cargo run -p my_src_test -- --workdir=./workspace`.
 5. Open a PR against `https://github.com/phayes/hydrogen_src` to get your converter officially added.

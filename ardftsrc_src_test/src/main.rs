@@ -6,9 +6,8 @@ use ardftsrc::{
 use clap::{ArgGroup, Parser, ValueEnum};
 use hydrogen_src::{
     FloatVariant, HydrogenError, HydrogenSrc, LocalHarness, ResampleRequestF32, ResampleRequestF64,
+    default_workspace_dir,
 };
-
-const LOCAL_SCRIPT_DIR: &str = "scripts/TestScripts";
 
 #[derive(Debug, Parser)]
 #[command(
@@ -17,7 +16,7 @@ const LOCAL_SCRIPT_DIR: &str = "scripts/TestScripts";
 struct Args {
     // General options
     #[arg(long)]
-    workdir: PathBuf,
+    workdir: Option<PathBuf>,
     /// Use f32 internal processing (default is f64).
     #[arg(long)]
     f32: bool,
@@ -247,8 +246,13 @@ fn main() -> Result<(), HydrogenError> {
         ),
     };
 
+    let workdir = match cli.workdir {
+        Some(path) => path,
+        None => default_workspace_dir()?,
+    };
+
     if cli.local {
-        let mut local = LocalHarness::new(cli.workdir, LOCAL_SCRIPT_DIR);
+        let mut local = LocalHarness::new(Some(workdir))?;
         match float_variant {
             FloatVariant::F32 => {
                 local.set_callback_f32(move |request: ResampleRequestF32| -> Vec<f32> {
@@ -292,7 +296,7 @@ fn main() -> Result<(), HydrogenError> {
         return Ok(());
     }
 
-    let mut hydrogen = HydrogenSrc::new(cli.workdir, float_variant, &output_label);
+    let mut hydrogen = HydrogenSrc::new(workdir, float_variant, &output_label);
 
     hydrogen.set_callback_f32(move |request: ResampleRequestF32| -> Vec<f32> {
         run_ardftsrc_f32(
