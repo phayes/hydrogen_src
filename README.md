@@ -24,6 +24,14 @@ cargo run -p rubato_src_test -- --local --json # Run analysis locally and report
 - `--chunk-size`: rubato chunk-size
 - `--sub-chunk`:  rubato sub-chunks
 
+## Rodio
+`rodio_src_test` uses rodio's default resampler (`rodio::conversions::SampleRateConverter`, linear interpolation). It has no tuning params.
+rodio's internal sample type is `f32` unless built with `--features 64bit`, so `--f64` only processes at full `f64` precision with that feature:
+
+```bash
+cargo run -p rodio_src_test --features 64bit -- --local --f64
+```
+
 ## Add your own converter
 
 1. Add a new workspace binary crate (for example `my_src_test`) and include `hydrogen_src` plus your SRC dependency in `Cargo.toml`.

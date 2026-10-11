@@ -77,14 +77,16 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "ardftsrc"
-version = "0.0.17"
-source = "git+https://github.com/phayes/ardftsrc-rs#6ad62696f9f4cae9a37dcd6f9e0bb884ca758a5c"
+version = "0.2.0"
+source = "git+https://github.com/phayes/ardftsrc#f727523159902264e16b2ef771d43b9d6f1b8f30"
 dependencies = [
+ "f256",
  "num-complex",
  "num-integer",
  "num-traits",
  "pxfm",
  "realfft",
+ "rustc_apfloat",
  "thiserror 2.0.18",
  "twofloat",
 ]
@@ -458,6 +460,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "dasp_sample"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c87e182de0887fd5361989c677c4e8f5000cd9491d6d563161a8f3a5519fc7f"
+
+[[package]]
 name = "deflate64"
 version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -553,6 +561,42 @@ name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
+
+[[package]]
+name = "f256"
+version = "0.11.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5390b8cc6379c77609e7fb5d1d8e0a5e178a89a9e5aea812409cf8d8d88cc8a2"
+dependencies = [
+ "f256_pow10_div_pow2_lut",
+ "f256_pow2_div_pow10_lut",
+ "f256_pow2_div_pow5_lut",
+ "f256_pow5_div_pow2_lut",
+]
+
+[[package]]
+name = "f256_pow10_div_pow2_lut"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f6ca8d1ce1a433ed0939ca1e054b561002cbcb9740d1d36c18d89009eb003002"
+
+[[package]]
+name = "f256_pow2_div_pow10_lut"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6580e1604d17d3723f9ea45d9d3b230b6d716bad991ec7cceda1ad760fa202b4"
+
+[[package]]
+name = "f256_pow2_div_pow5_lut"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "76b7418cb2e2a5be0dfb64027d7f009f9660ed6875ee049bc5ff30be006fcf6e"
+
+[[package]]
+name = "f256_pow5_div_pow2_lut"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "250ea0f9a0eb0e71b9040133a84777ddfd97a3c57689c249acb5917e1d869cb8"
 
 [[package]]
 name = "find-msvc-tools"
@@ -1240,6 +1284,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "num-bigint"
+version = "0.4.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c89e69e7e0f03bea5ef08013795c25018e101932225a656383bd384495ecc367"
+dependencies = [
+ "num-integer",
+ "num-traits",
+]
+
+[[package]]
 name = "num-complex"
 version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1260,6 +1314,17 @@ version = "0.1.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7969661fd2958a5cb096e56c8e1ad0444ac2bbcd0061bd28660485a44879858f"
 dependencies = [
+ "num-traits",
+]
+
+[[package]]
+name = "num-rational"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f83d14da390562dca69fc84082e73e548e1ad308d24accdedd2720017cb37824"
+dependencies = [
+ "num-bigint",
+ "num-integer",
  "num-traits",
 ]
 
@@ -1596,6 +1661,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "rodio"
+version = "0.22.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d0a536bb79db59098ef71a4dd4246c02eb87b316deceb1b68e0cde7167ec01eb"
+dependencies = [
+ "dasp_sample",
+ "num-rational",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "rodio_src_test"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "hydrogen_src",
+ "rodio",
+ "serde_json",
+]
+
+[[package]]
 name = "rubato"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1626,6 +1712,16 @@ name = "rustc-hash"
 version = "2.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94300abf3f1ae2e2b8ffb7b58043de3d399c73fa6f4b73826402a5c457614dbe"
+
+[[package]]
+name = "rustc_apfloat"
+version = "0.2.3+llvm-462a31f5a5ab"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "486c2179b4796f65bfe2ee33679acf0927ac83ecf583ad6c91c3b4570911b9ad"
+dependencies = [
+ "bitflags",
+ "smallvec",
+]
 
 [[package]]
 name = "rustc_version"

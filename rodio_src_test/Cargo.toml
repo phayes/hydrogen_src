@@ -1,0 +1,14 @@
+[package]
+name = "rodio_src_test"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+# Run rodio's internal processing in f64 instead of f32 (rodio's `Sample` type is chosen at compile time)
+64bit = ["rodio/64bit"]
+
+[dependencies]
+clap = { version = "4.6.1", features = ["derive"] }
+hydrogen_src = { version = "0.1.0", path = "../hydrogen_src" }
+rodio = { version = "0.22.2", default-features = false }
+serde_json = "1"
